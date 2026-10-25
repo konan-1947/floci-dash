@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createWrapper } from "../../../test/helpers";
 import React from "react";
@@ -312,7 +312,7 @@ describe("OrganizationsDashboard", () => {
 
   it("deletes OU via ResourceTable onDelete", async () => {
     mockOrg.mockReturnValue({ data: undefined, isLoading: false });
-    mockOUs.mockReturnValue({ data: { organizationalUnits: [{ id: "ou-1", name: "Test OU" }], total: 1 }, isLoading: false });
+    mockOUs.mockReturnValue({ data: { organizationalUnits: [{ Id: "ou-1", Name: "Test OU" }], total: 1 }, isLoading: false });
     mockDeleteOU.mockResolvedValueOnce(undefined);
     render(<OrganizationsDashboard />, { wrapper: createWrapper() });
     const u = userEvent.setup();
@@ -323,7 +323,7 @@ describe("OrganizationsDashboard", () => {
 
   it("handles OU delete error via ResourceTable", async () => {
     mockOrg.mockReturnValue({ data: undefined, isLoading: false });
-    mockOUs.mockReturnValue({ data: { organizationalUnits: [{ id: "ou-1", name: "Test OU" }], total: 1 }, isLoading: false });
+    mockOUs.mockReturnValue({ data: { organizationalUnits: [{ Id: "ou-1", Name: "Test OU" }], total: 1 }, isLoading: false });
     mockDeleteOU.mockRejectedValueOnce(new Error("delete failed"));
     render(<OrganizationsDashboard />, { wrapper: createWrapper() });
     const u = userEvent.setup();
@@ -436,7 +436,7 @@ describe("OrganizationsDashboard", () => {
 
   it("deletes account via ResourceTable", async () => {
     mockOrg.mockReturnValue({ data: undefined, isLoading: false });
-    mockAccounts.mockReturnValue({ data: { accounts: [{ id: "a-1", name: "Acct1" }], total: 1 }, isLoading: false });
+    mockAccounts.mockReturnValue({ data: { accounts: [{ Id: "a-1", Name: "Acct1" }], total: 1 }, isLoading: false });
     mockCloseAccount.mockResolvedValueOnce(undefined);
     render(<OrganizationsDashboard />, { wrapper: createWrapper() });
     const u = userEvent.setup();
@@ -447,7 +447,7 @@ describe("OrganizationsDashboard", () => {
 
   it("handles account close error", async () => {
     mockOrg.mockReturnValue({ data: undefined, isLoading: false });
-    mockAccounts.mockReturnValue({ data: { accounts: [{ id: "a-1", name: "Acct1" }], total: 1 }, isLoading: false });
+    mockAccounts.mockReturnValue({ data: { accounts: [{ Id: "a-1", Name: "Acct1" }], total: 1 }, isLoading: false });
     mockCloseAccount.mockRejectedValueOnce(new Error("close failed"));
     render(<OrganizationsDashboard />, { wrapper: createWrapper() });
     const u = userEvent.setup();
@@ -539,7 +539,7 @@ describe("OrganizationsDashboard", () => {
 
   it("deletes policy via ResourceTable", async () => {
     mockOrg.mockReturnValue({ data: undefined, isLoading: false });
-    mockPolicies.mockReturnValue({ data: { policies: [{ id: "p-1", name: "Test SCP" }], total: 1 }, isLoading: false });
+    mockPolicies.mockReturnValue({ data: { policies: [{ Id: "p-1", Name: "Test SCP" }], total: 1 }, isLoading: false });
     mockDeletePolicy.mockResolvedValueOnce(undefined);
     render(<OrganizationsDashboard />, { wrapper: createWrapper() });
     const u = userEvent.setup();
@@ -550,7 +550,7 @@ describe("OrganizationsDashboard", () => {
 
   it("handles policy delete error", async () => {
     mockOrg.mockReturnValue({ data: undefined, isLoading: false });
-    mockPolicies.mockReturnValue({ data: { policies: [{ id: "p-1", name: "Test SCP" }], total: 1 }, isLoading: false });
+    mockPolicies.mockReturnValue({ data: { policies: [{ Id: "p-1", Name: "Test SCP" }], total: 1 }, isLoading: false });
     mockDeletePolicy.mockRejectedValueOnce(new Error("delete failed"));
     render(<OrganizationsDashboard />, { wrapper: createWrapper() });
     const u = userEvent.setup();
@@ -590,8 +590,8 @@ describe("OrganizationsDashboard", () => {
 
   it("covers ACTIVE status indicator and awsManaged", async () => {
     mockOrg.mockReturnValue({ data: undefined, isLoading: false });
-    mockAccounts.mockReturnValue({ data: { accounts: [{ id: "a-1", name: "Acct1", status: "ACTIVE" }], total: 1 }, isLoading: false });
-    mockPolicies.mockReturnValue({ data: { policies: [{ id: "p-1", name: "Pol1", awsManaged: true }], total: 1 }, isLoading: false });
+    mockAccounts.mockReturnValue({ data: { accounts: [{ Id: "a-1", Name: "Acct1", Status: "ACTIVE" }], total: 1 }, isLoading: false });
+    mockPolicies.mockReturnValue({ data: { policies: [{ Id: "p-1", Name: "Pol1", AwsManaged: true }], total: 1 }, isLoading: false });
     render(<OrganizationsDashboard />, { wrapper: createWrapper() });
     const u = userEvent.setup();
     await u.click(screen.getByRole("tab", { name: /Accounts/ }));
@@ -600,9 +600,38 @@ describe("OrganizationsDashboard", () => {
     expect(screen.getByText(/Yes/)).toBeTruthy();
   });
 
+  it("renders PascalCase SDK fields in the OU, account and policy tables", async () => {
+    mockOrg.mockReturnValue({ data: undefined, isLoading: false });
+    mockOUs.mockReturnValue({ data: { organizationalUnits: [{ Id: "ou-1", Name: "Dev", Arn: "arn:ou-1" }], total: 1 }, isLoading: false });
+    mockAccounts.mockReturnValue({ data: { accounts: [{ Id: "111122223333", Name: "dev-account", Email: "dev@example.com", Status: "ACTIVE" }], total: 1 }, isLoading: false });
+    mockPolicies.mockReturnValue({ data: { policies: [{ Id: "p-1", Name: "DenyS3", Description: "Deny S3", AwsManaged: false }], total: 1 }, isLoading: false });
+    render(<OrganizationsDashboard />, { wrapper: createWrapper() });
+    const u = userEvent.setup();
+
+    await u.click(screen.getByRole("tab", { name: /Organizational Units/ }));
+    const ouTable = within(screen.getByTestId("rt-Organizational Units"));
+    expect(ouTable.getByTestId("col-name").textContent).toBe("Dev");
+    expect(ouTable.getByTestId("col-id").textContent).toBe("ou-1");
+    expect(ouTable.getByTestId("col-arn").textContent).toBe("arn:ou-1");
+
+    await u.click(screen.getByRole("tab", { name: /Accounts/ }));
+    const accountTable = within(screen.getByTestId("rt-Accounts"));
+    expect(accountTable.getByTestId("col-name").textContent).toBe("dev-account");
+    expect(accountTable.getByTestId("col-id").textContent).toBe("111122223333");
+    expect(accountTable.getByTestId("col-email").textContent).toBe("dev@example.com");
+    expect(accountTable.getByTestId("col-status").textContent).toBe("ACTIVE");
+
+    await u.click(screen.getByRole("tab", { name: /Policies/ }));
+    const policyTable = within(screen.getByTestId("rt-Service Control Policies"));
+    expect(policyTable.getByTestId("col-name").textContent).toBe("DenyS3");
+    expect(policyTable.getByTestId("col-id").textContent).toBe("p-1");
+    expect(policyTable.getByTestId("col-description").textContent).toBe("Deny S3");
+    expect(policyTable.getByTestId("col-awsManaged").textContent).toBe("No");
+  });
+
   it("covers non-Error OU delete rejection", async () => {
     mockOrg.mockReturnValue({ data: undefined, isLoading: false });
-    mockOUs.mockReturnValue({ data: { organizationalUnits: [{ id: "ou-1", name: "Test OU" }], total: 1 }, isLoading: false });
+    mockOUs.mockReturnValue({ data: { organizationalUnits: [{ Id: "ou-1", Name: "Test OU" }], total: 1 }, isLoading: false });
     mockDeleteOU.mockRejectedValueOnce("string error");
     render(<OrganizationsDashboard />, { wrapper: createWrapper() });
     const u = userEvent.setup();
@@ -613,7 +642,7 @@ describe("OrganizationsDashboard", () => {
 
   it("covers non-Error account close rejection", async () => {
     mockOrg.mockReturnValue({ data: undefined, isLoading: false });
-    mockAccounts.mockReturnValue({ data: { accounts: [{ id: "a-1", name: "Acct1" }], total: 1 }, isLoading: false });
+    mockAccounts.mockReturnValue({ data: { accounts: [{ Id: "a-1", Name: "Acct1" }], total: 1 }, isLoading: false });
     mockCloseAccount.mockRejectedValueOnce("string error");
     render(<OrganizationsDashboard />, { wrapper: createWrapper() });
     const u = userEvent.setup();
@@ -624,7 +653,7 @@ describe("OrganizationsDashboard", () => {
 
   it("covers non-Error policy delete rejection", async () => {
     mockOrg.mockReturnValue({ data: undefined, isLoading: false });
-    mockPolicies.mockReturnValue({ data: { policies: [{ id: "p-1", name: "Pol1" }], total: 1 }, isLoading: false });
+    mockPolicies.mockReturnValue({ data: { policies: [{ Id: "p-1", Name: "Pol1" }], total: 1 }, isLoading: false });
     mockDeletePolicy.mockRejectedValueOnce("string error");
     render(<OrganizationsDashboard />, { wrapper: createWrapper() });
     const u = userEvent.setup();

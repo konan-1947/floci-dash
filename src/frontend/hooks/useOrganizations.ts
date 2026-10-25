@@ -48,7 +48,7 @@ export interface OrgPolicy {
 export function useOrg() {
   return useQuery<{ organization: OrgOrganization | null }>({
     queryKey: ["aws", "org"],
-    queryFn: () => api("/aws/organizations/"),
+    queryFn: () => api("/aws/organizations"),
   });
 }
 

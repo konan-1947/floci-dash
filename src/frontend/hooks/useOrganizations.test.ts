@@ -48,7 +48,7 @@ describe("Organizations query hooks", () => {
     mockApi.mockResolvedValueOnce({ organization: { Id: "o-1" } });
     const { result } = renderHook(() => useOrg(), { wrapper: createWrapper() });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockApi).toHaveBeenCalledWith("/aws/organizations/");
+    expect(mockApi).toHaveBeenCalledWith("/aws/organizations");
   });
 
   it("useOrgRoots calls correct URL", async () => {

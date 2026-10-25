@@ -209,12 +209,12 @@ export function OrganizationsDashboard() {
                   loading={ous.isLoading}
                   emptyMessage="No OUs in this root"
                   columns={[
-                    { id: "name", header: "Name", cell: (i: any) => i.name, isRowHeader: true },
-                    { id: "id", header: "ID", cell: (i: any) => i.id },
-                    { id: "arn", header: "ARN", cell: (i: any) => i.arn },
+                    { id: "name", header: "Name", cell: (i: any) => i.Name, isRowHeader: true },
+                    { id: "id", header: "ID", cell: (i: any) => i.Id },
+                    { id: "arn", header: "ARN", cell: (i: any) => i.Arn },
                   ]}
                   onDelete={(item: any) =>
-                    deleteOU.mutateAsync(item.id).then(() => showToast("success", `OU "${item.name}" deleted`)).catch((e) => showToast("error", e?.message || "Failed to delete"))
+                    deleteOU.mutateAsync(item.Id).then(() => showToast("success", `OU "${item.Name}" deleted`)).catch((e) => showToast("error", e?.message || "Failed to delete"))
                   }
                                 />
                 <Modal
@@ -250,13 +250,13 @@ export function OrganizationsDashboard() {
                   loading={accounts.isLoading}
                   emptyMessage="No accounts"
                   columns={[
-                    { id: "name", header: "Name", cell: (i: any) => i.name, isRowHeader: true },
-                    { id: "id", header: "Account ID", cell: (i: any) => i.id },
-                    { id: "email", header: "Email", cell: (i: any) => i.email },
-                    { id: "status", header: "Status", cell: (i: any) => <StatusIndicator type={i.status === "ACTIVE" ? "success" : "warning"}>{i.status}</StatusIndicator> },
+                    { id: "name", header: "Name", cell: (i: any) => i.Name, isRowHeader: true },
+                    { id: "id", header: "Account ID", cell: (i: any) => i.Id },
+                    { id: "email", header: "Email", cell: (i: any) => i.Email },
+                    { id: "status", header: "Status", cell: (i: any) => <StatusIndicator type={i.Status === "ACTIVE" ? "success" : "warning"}>{i.Status}</StatusIndicator> },
                   ]}
                   onDelete={(item: any) =>
-                    closeAccount.mutateAsync(item.id).then(() => showToast("success", `Account "${item.name}" closed`)).catch((e) => showToast("error", e?.message || "Failed to close"))
+                    closeAccount.mutateAsync(item.Id).then(() => showToast("success", `Account "${item.Name}" closed`)).catch((e) => showToast("error", e?.message || "Failed to close"))
                   }
                 />
                 <Modal
@@ -295,13 +295,13 @@ export function OrganizationsDashboard() {
                   loading={policies.isLoading}
                   emptyMessage="No policies"
                   columns={[
-                    { id: "name", header: "Name", cell: (i: any) => i.name, isRowHeader: true },
-                    { id: "id", header: "ID", cell: (i: any) => i.id },
-                    { id: "description", header: "Description", cell: (i: any) => i.description || "-" },
-                    { id: "awsManaged", header: "AWS Managed", cell: (i: any) => i.awsManaged ? "Yes" : "No" },
+                    { id: "name", header: "Name", cell: (i: any) => i.Name, isRowHeader: true },
+                    { id: "id", header: "ID", cell: (i: any) => i.Id },
+                    { id: "description", header: "Description", cell: (i: any) => i.Description || "-" },
+                    { id: "awsManaged", header: "AWS Managed", cell: (i: any) => i.AwsManaged ? "Yes" : "No" },
                   ]}
                   onDelete={(item: any) =>
-                    deletePolicy.mutateAsync(item.id).then(() => showToast("success", `Policy "${item.name}" deleted`)).catch((e) => showToast("error", e?.message || "Failed to delete"))
+                    deletePolicy.mutateAsync(item.Id).then(() => showToast("success", `Policy "${item.Name}" deleted`)).catch((e) => showToast("error", e?.message || "Failed to delete"))
                   }
                 />
                 <Modal
