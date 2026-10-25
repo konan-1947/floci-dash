@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within, act } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { clickButton, createWrapper } from "../../test/helpers";
@@ -199,9 +199,38 @@ vi.mock("../components/EC2Terminal", () => ({
   ),
 }));
 
+// Capture the registered side navigation and breadcrumbs (the shell renders them in the app).
+const shell = vi.hoisted(() => ({ nav: null as any, crumbs: null as any }));
+vi.mock("../components/ServiceNavigationContext", () => ({
+  useServiceNavigation: (nav: unknown) => {
+    shell.nav = nav;
+  },
+  useBreadcrumbs: (items: unknown) => {
+    shell.crumbs = items;
+  },
+}));
+
+// The instances views have their own tests (ec2/InstancesView.test.tsx); stub them to expose their callbacks.
+vi.mock("./ec2/InstancesView", () => ({
+  EC2InstanceList: ({ onSelect, onLaunch, onLaunchFromTemplate }: any) => (
+    <div>
+      <h2>Instances</h2>
+      <button onClick={() => onSelect("i-1")}>i-1</button>
+      <button onClick={onLaunch}>Launch instances</button>
+      <button onClick={onLaunchFromTemplate}>Launch instance from template</button>
+    </div>
+  ),
+  EC2InstanceDetail: ({ id, onBack }: any) => (
+    <div>
+      <h1>Instance summary for {id}</h1>
+      <button onClick={onBack}>Back to instances</button>
+    </div>
+  ),
+}));
+
 // ─── Static imports (after mock) ───────────────────────
 
-import EC2Page, { EC2InstanceList, EC2LaunchTemplateList } from "./EC2Page";
+import EC2Page, { EC2LaunchTemplateList } from "./EC2Page";
 
 // Global reset for all hoisted states
 beforeEach(() => {
@@ -238,100 +267,6 @@ beforeEach(() => {
 
 // ─── Tests ─────────────────────────────────────────────
 
-describe("EC2InstanceList — AMI auto-detection", () => {
-  beforeEach(() => {
-  vi.clearAllMocks();
-  mockPrefixLists.mockReturnValue({ data: { prefixLists: [], total: 0 }, isLoading: false });
-  mockSpotRequests.mockReturnValue({ data: { spotInstanceRequests: [], total: 0 }, isLoading: false });
-  mockSgRules.mockReturnValue({ data: { rules: [], total: 0 }, isLoading: false });
-  requestSpotState.isError = false;
-  requestSpotState.error = null;
-  mockInstances.mockReturnValue({ data: { instances: [], total: 0 }, isLoading: false, isError: false, error: null });
-  mockKeyPairs.mockReturnValue({ data: { keyPairs: [] } });
-  mockSubnets.mockReturnValue({ data: { subnets: [] } });
-    vi.clearAllMocks();
-
-    // Default mock returns for hooks used by EC2InstanceList
-    mockInstances.mockReturnValue({
-      data: { instances: [], total: 0 },
-      isLoading: false,
-      isError: false,
-      error: null,
-    });
-    mockKeyPairs.mockReturnValue({ data: { keyPairs: [] } });
-    mockSubnets.mockReturnValue({ data: { subnets: [] } });
-    mockSecurityGroups.mockReturnValue({ data: { securityGroups: [] } });
-  });
-
-  it("auto-selects first AMI from catalog when launch modal opens", async () => {
-    mockAmis.mockReturnValue({
-      data: {
-        images: [
-          { id: "ami-0abc", name: "Amazon Linux 2023", platform: "Linux", architecture: "x86_64", state: "available" },
-          { id: "ami-0def", name: "Ubuntu 22.04", platform: "Linux", architecture: "arm64", state: "available" },
-        ],
-        total: 2,
-      },
-      isLoading: false,
-    });
-
-    const user = userEvent.setup();
-    render(<EC2InstanceList onSelect={vi.fn()} />, { wrapper: createWrapper() });
-
-    // Verify the initial form state uses the hardcoded default
-    // (The Select isn't visible yet because the modal is closed)
-
-    // Open the launch modal
-    await clickButton(user, /create/i);
-
-    // The auto-detection useEffect should have selected the first AMI
-    // The Cloudscape Select button displays the selected AMI ID
-    await waitFor(() => {
-      // Find buttons in the modal that contain the auto-detected AMI ID
-      const amiButtons = screen.getAllByRole("button");
-      const autoSelected = amiButtons.find(b => b.textContent?.includes("ami-0abc"));
-      expect(autoSelected).toBeTruthy();
-      // Verify it's NOT the old default
-      const oldDefault = amiButtons.find(b => b.textContent?.includes("ami-0abcdef1234567891"));
-      expect(oldDefault).toBeFalsy();
-    });
-  });
-
-  it("renders fallback Input when AMI catalog is empty", async () => {
-    mockAmis.mockReturnValue({
-      data: { images: [], total: 0 },
-      isLoading: false,
-    });
-
-    const user = userEvent.setup();
-    render(<EC2InstanceList onSelect={vi.fn()} />, { wrapper: createWrapper() });
-
-    // Open the launch modal
-    await clickButton(user, /create/i);
-
-    // When no AMIs, the component renders an Input with placeholder "ami-xxx"
-    await waitFor(() => {
-      expect(screen.getByPlaceholderText("ami-xxx")).toBeTruthy();
-    });
-  });
-
-  it("renders fallback Input when AMIs are still loading", async () => {
-    mockAmis.mockReturnValue({
-      data: undefined,
-      isLoading: true,
-    });
-
-    const user = userEvent.setup();
-    render(<EC2InstanceList onSelect={vi.fn()} />, { wrapper: createWrapper() });
-
-    await clickButton(user, /create/i);
-
-    // While loading, no images means we show the Input fallback
-    await waitFor(() => {
-      expect(screen.getByPlaceholderText("ami-xxx")).toBeTruthy();
-    });
-  });
-});
 
 describe("EC2LaunchTemplateList — AMI auto-detection", () => {
   beforeEach(() => {
@@ -417,97 +352,6 @@ describe("EC2LaunchTemplateList — AMI auto-detection", () => {
   });
 });
 
-describe("EC2InstanceList — list states", () => {
-  beforeEach(() => {
-  vi.clearAllMocks();
-  mockPrefixLists.mockReturnValue({ data: { prefixLists: [], total: 0 }, isLoading: false });
-  mockSpotRequests.mockReturnValue({ data: { spotInstanceRequests: [], total: 0 }, isLoading: false });
-  mockSgRules.mockReturnValue({ data: { rules: [], total: 0 }, isLoading: false });
-  requestSpotState.isError = false;
-  requestSpotState.error = null;
-  mockInstances.mockReturnValue({ data: { instances: [], total: 0 }, isLoading: false, isError: false, error: null });
-  mockKeyPairs.mockReturnValue({ data: { keyPairs: [] } });
-  mockSubnets.mockReturnValue({ data: { subnets: [] } });
-    vi.clearAllMocks();
-
-    mockInstances.mockReturnValue({
-      data: { instances: [], total: 0 },
-      isLoading: false,
-      isError: false,
-      error: null,
-    });
-    mockKeyPairs.mockReturnValue({ data: { keyPairs: [] } });
-    mockSubnets.mockReturnValue({ data: { subnets: [] } });
-    mockSecurityGroups.mockReturnValue({ data: { securityGroups: [] } });
-    mockAmis.mockReturnValue({ data: { images: [] }, isLoading: false });
-  });
-
-  it("renders instances from data", () => {
-    mockInstances.mockReturnValue({
-      data: {
-        instances: [
-          {
-            id: "i-0abc123",
-            state: "running",
-            instanceType: "t2.micro",
-            privateIp: "10.0.0.1",
-            publicIp: "54.0.0.1",
-            launchTime: "2024-01-01T00:00:00Z",
-            keyName: "my-key",
-          },
-        ],
-        total: 1,
-      },
-      isLoading: false,
-      isError: false,
-      error: null,
-    });
-
-    render(<EC2InstanceList onSelect={vi.fn()} />, { wrapper: createWrapper() });
-
-    expect(screen.getAllByText("i-0abc123").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("t2.micro").length).toBeGreaterThan(0);
-  });
-
-  it("shows empty state when no instances", () => {
-    mockInstances.mockReturnValue({
-      data: { instances: [], total: 0 },
-      isLoading: false,
-      isError: false,
-      error: null,
-    });
-
-    render(<EC2InstanceList onSelect={vi.fn()} />, { wrapper: createWrapper() });
-
-    expect(screen.getByText("No instances found")).toBeTruthy();
-  });
-
-  it("shows error state when loading fails", () => {
-    mockInstances.mockReturnValue({
-      data: undefined,
-      isLoading: false,
-      isError: true,
-      error: new Error("boom-instances"),
-    });
-
-    render(<EC2InstanceList onSelect={vi.fn()} />, { wrapper: createWrapper() });
-
-    expect(screen.getByText("boom-instances")).toBeTruthy();
-  });
-
-  it("shows loading state while instances load", () => {
-    mockInstances.mockReturnValue({
-      data: undefined,
-      isLoading: true,
-      isError: false,
-      error: null,
-    });
-
-    render(<EC2InstanceList onSelect={vi.fn()} />, { wrapper: createWrapper() });
-
-    expect(screen.getByText("Loading resources...")).toBeTruthy();
-  });
-});
 
 describe("EC2LaunchTemplateList — list states", () => {
   beforeEach(() => {
@@ -608,8 +452,16 @@ function pageWrapper() {
   );
 }
 
-async function goToTab(user: UserEvent, name: RegExp) {
-  await user.click(screen.getByRole("tab", { name }));
+/** The side-navigation links (sections flattened), as the shell would render them. */
+function navLinks(): { text: string; href: string }[] {
+  return shell.nav.items.flatMap((i: any) => (i.type === "section" ? i.items : [i]));
+}
+
+/** Open a page section through the registered EC2 side navigation. */
+async function goToTab(_user: UserEvent, name: RegExp) {
+  const link = navLinks().find((l) => name.test(l.text));
+  if (!link) throw new Error(`No EC2 nav link matching ${name}`);
+  act(() => shell.nav.onFollow(link.href));
 }
 
 /** Click the last button whose accessible name exactly matches `name`. */
@@ -1590,44 +1442,6 @@ describe("EC2NetworkInterfaceList (EC2Page — Network Interfaces tab)", () => {
 
 // ─── EC2Page shell (breadcrumbs / default tab) ─────────
 
-describe("EC2Page shell", () => {
-  beforeEach(() => {
-  vi.clearAllMocks();
-  mockPrefixLists.mockReturnValue({ data: { prefixLists: [], total: 0 }, isLoading: false });
-  mockSpotRequests.mockReturnValue({ data: { spotInstanceRequests: [], total: 0 }, isLoading: false });
-  mockSgRules.mockReturnValue({ data: { rules: [], total: 0 }, isLoading: false });
-  requestSpotState.isError = false;
-  requestSpotState.error = null;
-  mockInstances.mockReturnValue({ data: { instances: [], total: 0 }, isLoading: false, isError: false, error: null });
-  mockKeyPairs.mockReturnValue({ data: { keyPairs: [] } });
-  mockSubnets.mockReturnValue({ data: { subnets: [] } });
-    vi.clearAllMocks();
-    setupDefaults();
-  });
-
-  it("renders breadcrumbs and opens on the Instances tab by default", async () => {
-    const user = userEvent.setup();
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    // Header description is unique to the EC2 page header
-    expect(screen.getByText("Amazon Elastic Compute Cloud")).toBeTruthy();
-    const instancesTab = screen.getByRole("tab", { name: /Instances/i });
-    expect(instancesTab.getAttribute("aria-selected")).toBe("true");
-    // instances empty state is visible before any tab switch
-    expect(screen.getByText("No instances found")).toBeTruthy();
-    // breadcrumb items exist
-    expect(screen.getAllByText("Dashboard").length).toBeGreaterThan(0);
-  });
-
-  it("switching tabs unmounts the previous panel content", async () => {
-    const user = userEvent.setup();
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    expect(screen.getByText("No instances found")).toBeTruthy();
-    await goToTab(user, /VPCs/i);
-    await waitFor(() => expect(screen.getByText("No VPCs found")).toBeTruthy());
-    // instances panel content is no longer mounted
-    expect(screen.queryByText("No instances found")).toBeNull();
-  });
-});
 
 // ─── Flow Logs ────────────────────────────────────────────
 
@@ -1689,288 +1503,9 @@ describe("EC2NetworkAclList (EC2Page — Network ACLs tab)", () => {
 
 // ─── EC2InstanceDetail ───────────────────────────────────
 
-describe("EC2InstanceDetail (EC2Page — Instances tab → click instance)", () => {
-  beforeEach(() => {
-  vi.clearAllMocks();
-  mockPrefixLists.mockReturnValue({ data: { prefixLists: [], total: 0 }, isLoading: false });
-  mockSpotRequests.mockReturnValue({ data: { spotInstanceRequests: [], total: 0 }, isLoading: false });
-  mockSgRules.mockReturnValue({ data: { rules: [], total: 0 }, isLoading: false });
-  requestSpotState.isError = false;
-  requestSpotState.error = null;
-  mockInstances.mockReturnValue({ data: { instances: [], total: 0 }, isLoading: false, isError: false, error: null });
-  mockKeyPairs.mockReturnValue({ data: { keyPairs: [] } });
-  mockSubnets.mockReturnValue({ data: { subnets: [] } });
-    vi.clearAllMocks();
-    setupDefaults();
-    mockInstances.mockReturnValue({
-      data: { instances: [{ id: "i-detail", state: "running", instanceType: "t2.micro", privateIp: "10.0.0.5", publicIp: "54.0.0.5", launchTime: "2024-01-01T00:00:00Z", keyName: "my-key", vpcId: "vpc-1", subnetId: "subnet-1", imageId: "ami-1", availabilityZone: "us-east-1a", architecture: "x86_64", platform: "Linux", ebsOptimized: false, monitoring: "disabled", rootDeviceName: "/dev/xvda", rootDeviceType: "ebs" }], total: 1 },
-      isLoading: false, isError: false, error: null,
-    });
-  });
-
-  it("renders instance detail with header and property table", async () => {
-    mockInstanceDetail.mockReturnValue({
-      data: { id: "i-detail", instanceType: "t2.micro", state: "running", privateIp: "10.0.0.5", publicIp: "54.0.0.5", launchTime: "2024-01-01T00:00:00Z", keyName: "my-key", vpcId: "vpc-1", subnetId: "subnet-1", imageId: "ami-1", availabilityZone: "us-east-1a", architecture: "x86_64", platform: "Linux", ebsOptimized: false, monitoring: "disabled", rootDeviceName: "/dev/xvda", rootDeviceType: "ebs", sourceDestCheck: true, iamInstanceProfile: null },
-      isLoading: false, isError: false, error: null,
-    });
-    const user = userEvent.setup();
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await waitFor(() => expect(screen.getAllByText("i-detail").length).toBeGreaterThan(0));
-    await user.click(screen.getByRole("button", { name: "i-detail" }));
-    await waitFor(() => expect(screen.getByText("Back to Instances")).toBeTruthy());
-    expect(screen.getByText("t2.micro")).toBeTruthy();
-    expect(screen.getByText("Connection Info")).toBeTruthy();
-  });
-
-  it("shows loading state", async () => {
-    mockInstanceDetail.mockReturnValue({ data: undefined, isLoading: true, isError: false, error: null });
-    const user = userEvent.setup();
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await waitFor(() => expect(screen.getAllByText("i-detail").length).toBeGreaterThan(0));
-    await user.click(screen.getByRole("button", { name: "i-detail" }));
-    await waitFor(() => expect(screen.getByText("Loading instance details...")).toBeTruthy());
-  });
-
-  it("shows error state", async () => {
-    mockInstanceDetail.mockReturnValue({ data: undefined, isLoading: false, isError: true, error: new Error("boom-inst-detail") });
-    const user = userEvent.setup();
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await waitFor(() => expect(screen.getAllByText("i-detail").length).toBeGreaterThan(0));
-    await user.click(screen.getByRole("button", { name: "i-detail" }));
-    await waitFor(() => expect(screen.getByText("boom-inst-detail")).toBeTruthy());
-  });
-});
 
 // ─── Instance List: Action Buttons by state ─────────────
 
-describe("EC2InstanceList — action buttons by state", () => {
-  beforeEach(() => {
-  vi.clearAllMocks();
-  mockPrefixLists.mockReturnValue({ data: { prefixLists: [], total: 0 }, isLoading: false });
-  mockSpotRequests.mockReturnValue({ data: { spotInstanceRequests: [], total: 0 }, isLoading: false });
-  mockSgRules.mockReturnValue({ data: { rules: [], total: 0 }, isLoading: false });
-  requestSpotState.isError = false;
-  requestSpotState.error = null;
-  mockInstances.mockReturnValue({ data: { instances: [], total: 0 }, isLoading: false, isError: false, error: null });
-  mockKeyPairs.mockReturnValue({ data: { keyPairs: [] } });
-  mockSubnets.mockReturnValue({ data: { subnets: [] } });
-    vi.clearAllMocks();
-    mockKeyPairs.mockReturnValue({ data: { keyPairs: [] } });
-    mockSubnets.mockReturnValue({ data: { subnets: [] } });
-    mockSecurityGroups.mockReturnValue({ data: { securityGroups: [] } });
-    mockAmis.mockReturnValue({ data: { images: [] }, isLoading: false });
-  });
-
-  it("shows Start button for stopped instance", () => {
-    mockInstances.mockReturnValue({
-      data: {
-        instances: [{ id: "i-stopped", state: "stopped", instanceType: "t2.micro" }],
-        total: 1,
-      },
-      isLoading: false, isError: false, error: null,
-    });
-    render(<EC2InstanceList onSelect={vi.fn()} />, { wrapper: createWrapper() });
-    expect(screen.getByRole("button", { name: /Start i-stopped/i })).toBeTruthy();
-  });
-
-  it("shows Stop and Reboot buttons for running instance", () => {
-    mockInstances.mockReturnValue({
-      data: {
-        instances: [{ id: "i-running", state: "running", instanceType: "t2.micro" }],
-        total: 1,
-      },
-      isLoading: false, isError: false, error: null,
-    });
-    render(<EC2InstanceList onSelect={vi.fn()} />, { wrapper: createWrapper() });
-    expect(screen.getByRole("button", { name: /Stop i-running/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Reboot i-running/i })).toBeTruthy();
-  });
-
-  // ─── EC2InstanceDetail — action buttons ────────────────────
-
-  it("shows Connect button in instance detail for running state", async () => {
-    const user = userEvent.setup();
-    mockInstances.mockReturnValue({
-      data: { instances: [{ id: "i-connect", state: "running", instanceType: "t2.micro" }], total: 1 },
-      isLoading: false, isError: false, error: null,
-    });
-    mockInstanceDetail.mockReturnValue({
-      data: { id: "i-connect", state: "running", instanceType: "t2.micro", privateIp: "10.0.0.1", publicIp: "54.0.0.1", vpcId: "vpc-1", subnetId: "subnet-1", keyName: "my-key", imageId: "ami-0abc", availabilityZone: "us-east-1a", architecture: "x86_64", platform: "Linux", launchTime: "2024-01-01T00:00:00Z", iamInstanceProfile: null, ebsOptimized: false, monitoring: "disabled", rootDeviceName: "/dev/xvda", rootDeviceType: "ebs" },
-      isLoading: false, isError: false, error: null,
-    });
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await goToTab(user, /Instances/i);
-    await clickButton(user, /i-connect/i);
-    await waitFor(() => expect(screen.getByText("Connect")).toBeTruthy());
-    expect(screen.getByText("Docker Exec")).toBeTruthy();
-  });
-
-  it("shows Start button in instance detail for stopped state", async () => {
-    const user = userEvent.setup();
-    mockInstances.mockReturnValue({
-      data: { instances: [{ id: "i-stopped-d", state: "stopped", instanceType: "t2.micro" }], total: 1 },
-      isLoading: false, isError: false, error: null,
-    });
-    mockInstanceDetail.mockReturnValue({
-      data: { id: "i-stopped-d", state: "stopped", instanceType: "t2.micro", privateIp: null, publicIp: null },
-      isLoading: false, isError: false, error: null,
-    });
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await goToTab(user, /Instances/i);
-    await clickButton(user, /i-stopped-d/i);
-    await waitFor(() => expect(screen.getByText("Start")).toBeTruthy());
-  });
-
-  it("shows Stop and Reboot buttons in instance detail for running state", async () => {
-    const user = userEvent.setup();
-    mockInstances.mockReturnValue({
-      data: { instances: [{ id: "i-running-d", state: "running", instanceType: "t2.micro" }], total: 1 },
-      isLoading: false, isError: false, error: null,
-    });
-    mockInstanceDetail.mockReturnValue({
-      data: { id: "i-running-d", state: "running", instanceType: "t2.micro" },
-      isLoading: false, isError: false, error: null,
-    });
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await goToTab(user, /Instances/i);
-    await clickButton(user, /i-running-d/i);
-    await waitFor(() => {
-      expect(screen.getByText("Stop")).toBeTruthy();
-      expect(screen.getByText("Reboot")).toBeTruthy();
-    });
-  });
-
-  it("returns null from instance detail when data is undefined", async () => {
-    const user = userEvent.setup();
-    mockInstanceDetail.mockReturnValue({ data: undefined, isLoading: false, isError: false, error: null });
-    mockInstances.mockReturnValue({
-      data: { instances: [{ id: "i-null", state: "running", instanceType: "t2.micro" }], total: 1 },
-      isLoading: false, isError: false, error: null,
-    });
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await goToTab(user, /Instances/i);
-    await clickButton(user, /i-null/i);
-    await waitFor(() => {
-      expect(screen.queryByText("Back to Instances")).toBeNull();
-    });
-  });
-
-  // ─── VPC Detail Edge Cases ────────────────────────────────
-
-  it("returns null from VPC detail when data is undefined", async () => {
-    const user = userEvent.setup();
-    mockVpcs.mockReturnValue({
-      data: { vpcs: [{ id: "vpc-null", state: "available", cidrBlock: "10.0.0.0/16", isDefault: false, instanceTenancy: "default" }], total: 1 },
-      isLoading: false, isError: false, error: null,
-    });
-    mockVpc.mockReturnValue({ data: undefined, isLoading: false, isError: false, error: null });
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await goToTab(user, /VPCs/i);
-    await user.click(screen.getByRole("button", { name: "vpc-null" }));
-    await waitFor(() => {
-      expect(screen.queryByText("Back to VPCs")).toBeNull();
-    });
-  });
-
-  it("shows delete button in VPC detail for non-default VPC", async () => {
-    const user = userEvent.setup();
-    mockVpcs.mockReturnValue({
-      data: { vpcs: [{ id: "vpc-nondef", state: "available", cidrBlock: "10.0.0.0/16", isDefault: false, instanceTenancy: "default" }], total: 1 },
-      isLoading: false, isError: false, error: null,
-    });
-    mockVpc.mockReturnValue({
-      data: { id: "vpc-nondef", state: "available", cidrBlock: "10.0.0.0/16", isDefault: false, instanceTenancy: "default" },
-      isLoading: false, isError: false, error: null,
-    });
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await goToTab(user, /VPCs/i);
-    await user.click(screen.getByRole("button", { name: "vpc-nondef" }));
-    await waitFor(() => expect(screen.getByText("Back to VPCs")).toBeTruthy());
-    expect(screen.getByRole("button", { name: /Delete vpc-nondef/i })).toBeTruthy();
-  });
-
-
-
-  // ─── Key Pair Key Material Display ────────────────────────
-
-  it("shows key material modal after creating a key pair", async () => {
-    mockCreateKeyPair.mockImplementation((_d: any, opts: any) => opts?.onSuccess?.({ keyMaterial: "PEM-BASE64-DATA" }));
-    const user = userEvent.setup();
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await goToTab(user, /Key Pairs/i);
-    await waitFor(() => expect(screen.getByText("No key pairs found")).toBeTruthy());
-    await clickButton(user, /Create Key Pair/i);
-    await waitFor(() => expect(screen.getAllByText("Create Key Pair").length).toBeGreaterThan(0));
-    await user.type(screen.getByPlaceholderText("my-key"), "kp-key");
-    await clickLastButton(user, /^Create$/i);
-    await waitFor(() => {
-      expect(screen.getByText("Key Pair Created")).toBeTruthy();
-      expect(screen.getByText("PEM-BASE64-DATA")).toBeTruthy();
-    });
-    await clickButton(user, /I've saved the key/i);
-  });
-
-  // ─── Volume Delete — not shown for in-use ─────────────────
-
-  it("does NOT show delete button for volume in-use", async () => {
-    mockVolumes.mockReturnValue({
-      data: { volumes: [{ id: "vol-inuse", size: 8, volumeType: "gp2", state: "in-use", availabilityZone: "us-east-1a", attachments: [{ instanceId: "i-1", device: "/dev/sda" }] }], total: 1 },
-      isLoading: false, isError: false, error: null,
-    });
-    const user = userEvent.setup();
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await goToTab(user, /Volumes/i);
-    await waitFor(() => expect(screen.getAllByText("vol-inuse").length).toBeGreaterThan(0));
-    expect(screen.queryByRole("button", { name: /Delete vol-inuse/i })).toBeFalsy();
-  });
-
-  // ─── Launch Instance Error Alert ──────────────────────────
-
-  it("shows launch instance error alert in modal", async () => {
-    mockRunInstanceIsError = true;
-    mockRunInstanceError = new Error("Launch failed");
-    const user = userEvent.setup();
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await goToTab(user, /Instances/i);
-    await clickButton(user, /Create Instance/i);
-    await waitFor(() => {
-      expect(screen.getByText("Launch failed")).toBeTruthy();
-    });
-  });
-
-  // ─── Launch Instance with optional params ─────────────────
-
-  it("launches instance with all optional parameters (keyName, subnetId, securityGroupId)", async () => {
-    mockAmis.mockReturnValue({
-      data: { images: [{ id: "ami-0abc", name: "Test", platform: "Linux", architecture: "x86_64", state: "available" }], total: 1 },
-      isLoading: false,
-    });
-    mockKeyPairs.mockReturnValue({ data: { keyPairs: [{ name: "my-key" }], total: 1 } });
-    mockSubnets.mockReturnValue({ data: { subnets: [{ id: "subnet-9", cidrBlock: "10.0.1.0/24" }], total: 1 } });
-    mockSecurityGroups.mockReturnValue({ data: { securityGroups: [{ id: "sg-9", name: "web-sg" }], total: 1 } });
-
-    const user = userEvent.setup();
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await goToTab(user, /Instances/i);
-    await clickButton(user, /Create Instance/i);
-    await waitFor(() => expect(screen.getAllByText("Launch Instance").length).toBeGreaterThan(0));
-
-    // Select key pair
-    await pickSelectOption(user, /No key pair/i, /my-key/);
-    // Select subnet
-    await pickSelectOption(user, /Default/, /subnet-9/);
-    // Select security group
-    await pickSelectOption(user, /Default/, /sg-9/);
-
-    await clickLastButton(user, /^Launch$/i);
-    await waitFor(() => expect(mockRunInstance).toHaveBeenCalled());
-
-    const args = mockRunInstance.mock.calls[0][0];
-    expect(args.keyName).toBe("my-key");
-    expect(args.subnetId).toBe("subnet-9");
-    expect(args.securityGroupIds).toEqual(["sg-9"]);
-  });
-});
 
 // ─── Network Interfaces ──────────────────────────────
 
@@ -2562,42 +2097,6 @@ describe("EC2NetworkAclList (EC2Page — Network ACLs tab)", () => {
 
 // ─── CommandBox copy ──────────────────────────────────
 
-describe("EC2InstanceDetail — CommandBox copy", () => {
-  beforeEach(() => {
-  vi.clearAllMocks();
-  mockPrefixLists.mockReturnValue({ data: { prefixLists: [], total: 0 }, isLoading: false });
-  mockSpotRequests.mockReturnValue({ data: { spotInstanceRequests: [], total: 0 }, isLoading: false });
-  mockSgRules.mockReturnValue({ data: { rules: [], total: 0 }, isLoading: false });
-  requestSpotState.isError = false;
-  requestSpotState.error = null;
-  mockInstances.mockReturnValue({ data: { instances: [], total: 0 }, isLoading: false, isError: false, error: null });
-  mockKeyPairs.mockReturnValue({ data: { keyPairs: [] } });
-  mockSubnets.mockReturnValue({ data: { subnets: [] } });
-    vi.clearAllMocks();
-    setupDefaults();
-    mockInstances.mockReturnValue({
-      data: { instances: [{ id: "i-copy", state: "running", instanceType: "t2.micro" }], total: 1 },
-      isLoading: false, isError: false, error: null,
-    });
-    mockInstanceDetail.mockReturnValue({
-      data: { id: "i-copy", state: "running", instanceType: "t2.micro", privateIp: "10.0.0.1", publicIp: "54.0.0.1", vpcId: "vpc-1", subnetId: "subnet-1", keyName: "my-key", imageId: "ami-0abc", availabilityZone: "us-east-1a", architecture: "x86_64", platform: "Linux", launchTime: "2024-01-01T00:00:00Z", iamInstanceProfile: null, ebsOptimized: false, monitoring: "disabled", rootDeviceName: "/dev/xvda", rootDeviceType: "ebs" },
-      isLoading: false, isError: false, error: null,
-    });
-  });
-
-  it("shows Copied state after clicking the copy button", async () => {
-    const user = userEvent.setup();
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await goToTab(user, /Instances/i);
-    await clickButton(user, /i-copy/i);
-    await waitFor(() => expect(screen.getByText("Docker Exec")).toBeTruthy());
-    // Connection Info panel renders 3 CommandBoxes — click the first copy button.
-    // happy-dom's native Clipboard.writeText resolves, so handleCopy reaches
-    // setCopied(true) and the aria-label flips from "Copy to clipboard" to "Copied".
-    await user.click(screen.getAllByRole("button", { name: /Copy to clipboard/i })[0]);
-    await waitFor(() => expect(screen.getByRole("button", { name: /Copied/i })).toBeTruthy());
-  });
-});
 
 // ─── Delete Loading States (bulk hoisted state coverage) ─
 
@@ -2813,23 +2312,87 @@ describe("EC2Page — volumes create", () => {
 describe("EC2Page — shell navigation", () => {
   beforeEach(() => { vi.clearAllMocks(); setupDefaults(); });
 
-  it("navigates via breadcrumb", async () => {
-    const user = userEvent.setup();
+  const crumbTexts = () => shell.crumbs.map((c: any) => c.text);
+
+  it("opens on the EC2 Dashboard with the console side navigation", () => {
     render(<EC2Page />, { wrapper: pageWrapper() });
-    await user.click(screen.getByRole("link", { name: "Dashboard" }));
-    expect(screen.getAllByText("EC2").length).toBeGreaterThan(0);
+    expect(screen.getByRole("heading", { name: "EC2 Dashboard" })).toBeTruthy();
+    expect(shell.nav.header.text).toBe("EC2");
+    expect(shell.nav.activeHref).toBe("#dashboard");
+    expect(shell.nav.items.filter((i: any) => i.type === "section").map((i: any) => i.text)).toEqual([
+      "Instances", "Images", "Elastic Block Store", "Network & Security", "Virtual private cloud",
+    ]);
+    expect(navLinks()).toHaveLength(20);
+    expect(crumbTexts()).toEqual(["EC2"]);
   });
 
-  it("goes back from instance detail to the list", async () => {
+  it("switches sections from the side navigation and adds a breadcrumb", async () => {
     const user = userEvent.setup();
-    mockInstances.mockReturnValue({ data: { instances: [{ id: "i-back", state: "running", instanceType: "t2.micro" }], total: 1 }, isLoading: false, isError: false, error: null });
-    mockInstanceDetail.mockReturnValue({ data: { id: "i-back", state: "running", instanceType: "t2.micro" }, isLoading: false, isError: false, error: null });
     render(<EC2Page />, { wrapper: pageWrapper() });
-    await goToTab(user, /Instances/i);
-    await clickButton(user, /i-back/i);
-    await waitFor(() => expect(screen.getByText("Back to Instances")).toBeTruthy());
-    await user.click(screen.getByRole("button", { name: /Back to Instances/i }));
-    await waitFor(() => expect(screen.getByText("Create Instance")).toBeTruthy());
+    await goToTab(user, /^VPCs$/);
+    expect(await screen.findByText("No VPCs found")).toBeTruthy();
+    expect(shell.nav.activeHref).toBe("#vpcs");
+    expect(crumbTexts()).toEqual(["EC2", "VPCs"]);
+    expect(screen.queryByRole("heading", { name: "EC2 Dashboard" })).toBeNull();
+  });
+
+  it("renders every section from the navigation", async () => {
+    const user = userEvent.setup();
+    render(<EC2Page />, { wrapper: pageWrapper() });
+    for (const link of navLinks()) {
+      await goToTab(user, new RegExp(`^${link.text.replace(/[&]/g, "\$&")}$`));
+      expect(shell.nav.activeHref).toBe(link.href);
+    }
+  });
+
+  it("opens an instance from the list with an instance breadcrumb and returns", async () => {
+    const user = userEvent.setup();
+    render(<EC2Page />, { wrapper: pageWrapper() });
+    await goToTab(user, /^Instances$/);
+    await user.click(screen.getByRole("button", { name: "i-1" }));
+    expect(await screen.findByText("Instance summary for i-1")).toBeTruthy();
+    expect(crumbTexts()).toEqual(["EC2", "Instances", "i-1"]);
+    await user.click(screen.getByRole("button", { name: "Back to instances" }));
+    expect(screen.queryByText("Instance summary for i-1")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Instances" })).toBeTruthy();
+  });
+
+  it("opens Launch an instance from the dashboard and from the instances list", async () => {
+    const user = userEvent.setup();
+    render(<EC2Page />, { wrapper: pageWrapper() });
+    await user.click(screen.getByRole("button", { name: "Launch instance" }));
+    expect(screen.getByRole("heading", { name: "Launch an instance" })).toBeTruthy();
+    expect(shell.nav.activeHref).toBe("#instances");
+    expect(crumbTexts()).toEqual(["EC2", "Instances", "Launch an instance"]);
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("heading", { name: /^Instances/ })).toBeTruthy();
+    await user.click(screen.getAllByRole("button", { name: "Launch instances" })[0]);
+    expect(screen.getByRole("heading", { name: "Launch an instance" })).toBeTruthy();
+  });
+
+  it("goes to Launch Templates from the instances list", async () => {
+    const user = userEvent.setup();
+    render(<EC2Page />, { wrapper: pageWrapper() });
+    await goToTab(user, /^Instances$/);
+    await user.click(screen.getByRole("button", { name: "Launch instance from template" }));
+    expect(shell.nav.activeHref).toBe("#launch-templates");
+  });
+
+  it("opens a section from a dashboard resource count", async () => {
+    const user = userEvent.setup();
+    render(<EC2Page />, { wrapper: pageWrapper() });
+    await user.click(screen.getByRole("link", { name: "Volumes: 0" }));
+    expect(shell.nav.activeHref).toBe("#volumes");
+  });
+
+  it("adds the VPC id to the breadcrumbs in VPC detail", async () => {
+    const user = userEvent.setup();
+    mockVpcs.mockReturnValue({ data: { vpcs: [{ id: "vpc-c", state: "available", cidrBlock: "10.0.0.0/16", isDefault: false, instanceTenancy: "default" }], total: 1 }, isLoading: false, isError: false, error: null });
+    mockVpc.mockReturnValue({ data: { id: "vpc-c", state: "available", cidrBlock: "10.0.0.0/16", isDefault: false, instanceTenancy: "default" }, isLoading: false, isError: false, error: null });
+    render(<EC2Page />, { wrapper: pageWrapper() });
+    await goToTab(user, /^VPCs$/);
+    await clickButton(user, /vpc-c/i);
+    await waitFor(() => expect(crumbTexts()).toEqual(["EC2", "VPCs", "vpc-c"]));
   });
 
   it("goes back from VPC detail to the list", async () => {
@@ -2847,211 +2410,9 @@ describe("EC2Page — shell navigation", () => {
 
 // ─── Instance List — row actions ───────────────────────
 
-describe("EC2InstanceList — row actions", () => {
-  beforeEach(() => {
-  vi.clearAllMocks();
-  mockPrefixLists.mockReturnValue({ data: { prefixLists: [], total: 0 }, isLoading: false });
-  mockSpotRequests.mockReturnValue({ data: { spotInstanceRequests: [], total: 0 }, isLoading: false });
-  mockSgRules.mockReturnValue({ data: { rules: [], total: 0 }, isLoading: false });
-  requestSpotState.isError = false;
-  requestSpotState.error = null;
-  mockInstances.mockReturnValue({ data: { instances: [], total: 0 }, isLoading: false, isError: false, error: null });
-  mockKeyPairs.mockReturnValue({ data: { keyPairs: [] } });
-  mockSubnets.mockReturnValue({ data: { subnets: [] } });
-    vi.clearAllMocks();
-    mockKeyPairs.mockReturnValue({ data: { keyPairs: [] } });
-    mockSubnets.mockReturnValue({ data: { subnets: [] } });
-    mockSecurityGroups.mockReturnValue({ data: { securityGroups: [] } });
-    mockAmis.mockReturnValue({ data: { images: [] }, isLoading: false });
-  });
-
-  it("starts a stopped instance from the list", async () => {
-    const user = userEvent.setup();
-    mockInstances.mockReturnValue({ data: { instances: [{ id: "i-start", state: "stopped", instanceType: "t2.micro" }], total: 1 }, isLoading: false, isError: false, error: null });
-    render(<EC2InstanceList onSelect={vi.fn()} />, { wrapper: createWrapper() });
-    await user.click(screen.getByRole("button", { name: /Start i-start/i }));
-    await waitFor(() => expect(mockStartInstance).toHaveBeenCalledWith("i-start"));
-  });
-
-  it("stops and reboots a running instance from the list", async () => {
-    const user = userEvent.setup();
-    mockInstances.mockReturnValue({ data: { instances: [{ id: "i-stop", state: "running", instanceType: "t2.micro" }], total: 1 }, isLoading: false, isError: false, error: null });
-    render(<EC2InstanceList onSelect={vi.fn()} />, { wrapper: createWrapper() });
-    await user.click(screen.getByRole("button", { name: /Stop i-stop/i }));
-    await user.click(screen.getByRole("button", { name: /Reboot i-stop/i }));
-    await waitFor(() => expect(mockStopInstance).toHaveBeenCalledWith("i-stop"));
-    expect(mockRebootInstance).toHaveBeenCalledWith("i-stop");
-  });
-
-  it("terminates an instance from the list", async () => {
-    const user = userEvent.setup();
-    mockInstances.mockReturnValue({ data: { instances: [{ id: "i-term", state: "running", instanceType: "t2.micro" }], total: 1 }, isLoading: false, isError: false, error: null });
-    render(<EC2InstanceList onSelect={vi.fn()} />, { wrapper: createWrapper() });
-    await user.click(screen.getByRole("button", { name: /Delete i-term/i }));
-    await waitFor(() => expect(screen.getByText(/Are you sure/)).toBeTruthy());
-    await clickLastButton(user, /^Delete$/i);
-    await waitFor(() => expect(mockTerminateInstance).toHaveBeenCalledWith("i-term"));
-  });
-
-  it("filters instances by ID", async () => {
-    mockInstances.mockReturnValue({ data: { instances: [{ id: "i-alpha", state: "running", instanceType: "t2.micro" }, { id: "i-beta", state: "stopped", instanceType: "t2.micro" }], total: 2 }, isLoading: false, isError: false, error: null });
-    const user = userEvent.setup();
-    render(<EC2InstanceList onSelect={vi.fn()} />, { wrapper: createWrapper() });
-    const filterInput = screen.getByPlaceholderText("Find instances by ID");
-    await user.type(filterInput, "i-alpha");
-    await waitFor(() => expect(screen.queryByText("i-beta")).toBeNull());
-    expect(screen.getByText("i-alpha")).toBeTruthy();
-  });
-
-  it("cancels and escapes the launch modal", async () => {
-    const user = userEvent.setup();
-    mockInstances.mockReturnValue({ data: { instances: [], total: 0 }, isLoading: false, isError: false, error: null });
-    render(<EC2InstanceList onSelect={vi.fn()} />, { wrapper: createWrapper() });
-    await clickButton(user, /Create Instance/i);
-    await waitFor(() => expect(screen.getByPlaceholderText("ami-xxx")).toBeTruthy());
-    await clickInDialog(user, "Launch Instance", /^Cancel$/i);
-    expect(mockRunInstance).not.toHaveBeenCalled();
-    await clickButton(user, /Create Instance/i);
-    await waitFor(() => expect(screen.getByPlaceholderText("ami-xxx")).toBeTruthy());
-    dismissModalWithEscape();
-    expect(mockRunInstance).not.toHaveBeenCalled();
-  });
-
-  it("closes the launch modal on success", async () => {
-    const user = userEvent.setup();
-    let onSuccessRan = false;
-    mockRunInstance.mockImplementation((_args: any, opts: any) => { if (opts?.onSuccess) { onSuccessRan = true; opts.onSuccess(); } });
-    mockInstances.mockReturnValue({ data: { instances: [], total: 0 }, isLoading: false, isError: false, error: null });
-    render(<EC2InstanceList onSelect={vi.fn()} />, { wrapper: createWrapper() });
-    await clickButton(user, /Create Instance/i);
-    await waitFor(() => expect(screen.getByPlaceholderText("ami-xxx")).toBeTruthy());
-    await user.type(screen.getByPlaceholderText("ami-xxx"), "ami-custom");
-    await clickLastButton(user, /^Launch$/i);
-    await waitFor(() => expect(onSuccessRan).toBe(true));
-  });
-
-  it("changes the AMI via the Select in the launch modal", async () => {
-    const user = userEvent.setup();
-    mockAmis.mockReturnValue({ data: { images: [{ id: "ami-0abc", name: "A", platform: "Linux", architecture: "x86_64" }, { id: "ami-0def", name: "B", platform: "Linux", architecture: "x86_64" }], total: 2 }, isLoading: false });
-    mockInstances.mockReturnValue({ data: { instances: [], total: 0 }, isLoading: false, isError: false, error: null });
-    render(<EC2InstanceList onSelect={vi.fn()} />, { wrapper: createWrapper() });
-    await clickButton(user, /Create Instance/i);
-    await waitFor(() => expect(screen.getAllByText(/ami-0abc/).length).toBeGreaterThan(0));
-    await pickSelectOption(user, /ami-0abc/, /ami-0def/);
-    await clickLastButton(user, /^Launch$/i);
-    await waitFor(() => expect(mockRunInstance).toHaveBeenCalled());
-    expect((mockRunInstance.mock.calls[0][0] as any).imageId).toBe("ami-0def");
-  });
-
-  it("types an AMI id in the fallback input", async () => {
-    const user = userEvent.setup();
-    mockInstances.mockReturnValue({ data: { instances: [], total: 0 }, isLoading: false, isError: false, error: null });
-    render(<EC2InstanceList onSelect={vi.fn()} />, { wrapper: createWrapper() });
-    await clickButton(user, /Create Instance/i);
-    await waitFor(() => expect(screen.getByPlaceholderText("ami-xxx")).toBeTruthy());
-    const amiInput = screen.getByPlaceholderText("ami-xxx");
-    await user.clear(amiInput);
-    await user.type(amiInput, "ami-custom");
-    await clickLastButton(user, /^Launch$/i);
-    await waitFor(() => expect(mockRunInstance).toHaveBeenCalled());
-    expect((mockRunInstance.mock.calls[0][0] as any).imageId).toBe("ami-custom");
-  });
-
-  it("types the instance type in the launch modal", async () => {
-    const user = userEvent.setup();
-    mockInstances.mockReturnValue({ data: { instances: [], total: 0 }, isLoading: false, isError: false, error: null });
-    render(<EC2InstanceList onSelect={vi.fn()} />, { wrapper: createWrapper() });
-    await clickButton(user, /Create Instance/i);
-    await waitFor(() => expect(screen.getByPlaceholderText("t3.micro")).toBeTruthy());
-    const typeInput = screen.getByDisplayValue("t3.micro");
-    await user.clear(typeInput);
-    await user.type(typeInput, "t2.large");
-    await clickLastButton(user, /^Launch$/i);
-    await waitFor(() => expect(mockRunInstance).toHaveBeenCalled());
-    expect((mockRunInstance.mock.calls[0][0] as any).instanceType).toBe("t2.large");
-  });
-});
 
 // ─── Instance Detail — actions ─────────────────────────
 
-describe("EC2InstanceDetail — actions", () => {
-  beforeEach(() => {
-  vi.clearAllMocks();
-  mockPrefixLists.mockReturnValue({ data: { prefixLists: [], total: 0 }, isLoading: false });
-  mockSpotRequests.mockReturnValue({ data: { spotInstanceRequests: [], total: 0 }, isLoading: false });
-  mockSgRules.mockReturnValue({ data: { rules: [], total: 0 }, isLoading: false });
-  requestSpotState.isError = false;
-  requestSpotState.error = null;
-  mockInstances.mockReturnValue({ data: { instances: [], total: 0 }, isLoading: false, isError: false, error: null });
-  mockKeyPairs.mockReturnValue({ data: { keyPairs: [] } });
-  mockSubnets.mockReturnValue({ data: { subnets: [] } });
-    vi.clearAllMocks();
-    setupDefaults();
-    mockInstances.mockReturnValue({ data: { instances: [{ id: "i-det", state: "running", instanceType: "t2.micro" }], total: 1 }, isLoading: false, isError: false, error: null });
-    mockInstanceDetail.mockReturnValue({ data: { id: "i-det", state: "running", instanceType: "t2.micro", privateIp: "10.0.0.1", publicIp: "54.0.0.1", vpcId: "vpc-1", subnetId: "subnet-1", keyName: "my-key", imageId: "ami-0abc", availabilityZone: "us-east-1a", architecture: "x86_64", platform: "Linux", launchTime: "2024-01-01T00:00:00Z", iamInstanceProfile: null, ebsOptimized: false, monitoring: "disabled", rootDeviceName: "/dev/xvda", rootDeviceType: "ebs" }, isLoading: false, isError: false, error: null });
-  });
-
-  it("opens the terminal modal via Connect and dismisses with Escape", async () => {
-    const user = userEvent.setup();
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await goToTab(user, /Instances/i);
-    await clickButton(user, /i-det/i);
-    await waitFor(() => expect(screen.getByText("Connect")).toBeTruthy());
-    await user.click(screen.getByRole("button", { name: /^Connect$/i }));
-    await waitFor(() => expect(screen.getByText("Mocked Terminal")).toBeTruthy());
-    await user.click(screen.getByRole("button", { name: /Close Terminal/i }));
-    await waitFor(() => {
-      const dialog = dialogOf("Terminal — i-det").closest('[role="dialog"]') as HTMLElement;
-      expect(dialog.className).toContain("hidden");
-    });
-    // Reopen and dismiss with Escape to cover the modal onDismiss arrow
-    await user.click(screen.getByRole("button", { name: /^Connect$/i }));
-    await waitFor(() => expect(screen.getByText("Mocked Terminal")).toBeTruthy());
-    dismissModalWithEscape();
-    await waitFor(() => {
-      const dialog = dialogOf("Terminal — i-det").closest('[role="dialog"]') as HTMLElement;
-      expect(dialog.className).toContain("hidden");
-    });
-  });
-
-  it("starts a stopped instance from the detail view", async () => {
-    const user = userEvent.setup();
-    mockInstanceDetail.mockReturnValue({ data: { id: "i-det-s", state: "stopped", instanceType: "t2.micro" }, isLoading: false, isError: false, error: null });
-    mockInstances.mockReturnValue({ data: { instances: [{ id: "i-det-s", state: "stopped", instanceType: "t2.micro" }], total: 1 }, isLoading: false, isError: false, error: null });
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await goToTab(user, /Instances/i);
-    await clickButton(user, /i-det-s/i);
-    await waitFor(() => expect(screen.getByText("Start")).toBeTruthy());
-    await user.click(screen.getByRole("button", { name: /^Start$/i }));
-    await waitFor(() => expect(mockStartInstance).toHaveBeenCalledWith("i-det-s"));
-  });
-
-  it("stops and reboots a running instance from the detail view", async () => {
-    const user = userEvent.setup();
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await goToTab(user, /Instances/i);
-    await clickButton(user, /i-det/i);
-    await waitFor(() => expect(screen.getByText("Stop")).toBeTruthy());
-    await user.click(screen.getByRole("button", { name: /^Stop$/i }));
-    await user.click(screen.getByRole("button", { name: /^Reboot$/i }));
-    await waitFor(() => expect(mockStopInstance).toHaveBeenCalledWith("i-det"));
-    expect(mockRebootInstance).toHaveBeenCalledWith("i-det");
-  });
-
-  it("terminates an instance from the detail view and returns to the list", async () => {
-    const user = userEvent.setup();
-    mockTerminateInstance.mockResolvedValue(undefined);
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await goToTab(user, /Instances/i);
-    await clickButton(user, /i-det/i);
-    await waitFor(() => expect(screen.getByText("Connect")).toBeTruthy());
-    await user.click(screen.getByRole("button", { name: /Delete i-det/i }));
-    await waitFor(() => expect(screen.getByText(/Are you sure/)).toBeTruthy());
-    await clickLastButton(user, /^Delete$/i);
-    await waitFor(() => expect(mockTerminateInstance).toHaveBeenCalledWith("i-det"));
-    await waitFor(() => expect(screen.getByText("Create Instance")).toBeTruthy());
-  });
-});
 
 // ─── VPC Extras ────────────────────────────────────────
 
@@ -3792,170 +3153,9 @@ describe("EC2NetworkAclList — extras", () => {
 
 // ─── CommandBox fallbacks ──────────────────────────────
 
-describe("EC2InstanceDetail — CommandBox fallbacks", () => {
-  beforeEach(() => {
-  vi.clearAllMocks();
-  mockPrefixLists.mockReturnValue({ data: { prefixLists: [], total: 0 }, isLoading: false });
-  mockSpotRequests.mockReturnValue({ data: { spotInstanceRequests: [], total: 0 }, isLoading: false });
-  mockSgRules.mockReturnValue({ data: { rules: [], total: 0 }, isLoading: false });
-  requestSpotState.isError = false;
-  requestSpotState.error = null;
-  mockInstances.mockReturnValue({ data: { instances: [], total: 0 }, isLoading: false, isError: false, error: null });
-  mockKeyPairs.mockReturnValue({ data: { keyPairs: [] } });
-  mockSubnets.mockReturnValue({ data: { subnets: [] } });
-    vi.clearAllMocks();
-    setupDefaults();
-    mockInstances.mockReturnValue({
-      data: { instances: [{ id: "i-fb", state: "running", instanceType: "t2.micro" }], total: 1 },
-      isLoading: false, isError: false, error: null,
-    });
-    mockInstanceDetail.mockReturnValue({
-      data: { id: "i-fb", state: "running", instanceType: "t2.micro", privateIp: "10.0.0.1", publicIp: "54.0.0.1", vpcId: "vpc-1", subnetId: "subnet-1", keyName: "my-key", imageId: "ami-0abc", availabilityZone: "us-east-1a", architecture: "x86_64", platform: "Linux", launchTime: "2024-01-01T00:00:00Z", iamInstanceProfile: null, ebsOptimized: false, monitoring: "disabled", rootDeviceName: "/dev/xvda", rootDeviceType: "ebs" },
-      isLoading: false, isError: false, error: null,
-    });
-  });
-
-  it("selects the input text when clipboard access is denied", async () => {
-    const user = userEvent.setup();
-    vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(new Error("denied"));
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await goToTab(user, /Instances/i);
-    await clickButton(user, /i-fb/i);
-    await waitFor(() => expect(screen.getByText("Docker Exec")).toBeTruthy());
-    await user.click(screen.getAllByRole("button", { name: /Copy to clipboard/i })[0]);
-    await waitFor(() => expect(screen.getAllByRole("button", { name: /Copy to clipboard/i }).length).toBeGreaterThan(0));
-  });
-
-  it("selects the input text on focus", async () => {
-    const user = userEvent.setup();
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await goToTab(user, /Instances/i);
-    await clickButton(user, /i-fb/i);
-    await waitFor(() => expect(screen.getByText("Docker Exec")).toBeTruthy());
-    const input = screen.getAllByDisplayValue(/ssh/)[0];
-    await user.click(input);
-    expect(input).toBeTruthy();
-  });
-});
 
 // ─── Launch modal AMI edges ────────────────────────────
 
-describe("EC2InstanceList — launch modal AMI edges", () => {
-  beforeEach(() => {
-  vi.clearAllMocks();
-  mockPrefixLists.mockReturnValue({ data: { prefixLists: [], total: 0 }, isLoading: false });
-  mockSpotRequests.mockReturnValue({ data: { spotInstanceRequests: [], total: 0 }, isLoading: false });
-  mockSgRules.mockReturnValue({ data: { rules: [], total: 0 }, isLoading: false });
-  requestSpotState.isError = false;
-  requestSpotState.error = null;
-  mockInstances.mockReturnValue({ data: { instances: [], total: 0 }, isLoading: false, isError: false, error: null });
-  mockKeyPairs.mockReturnValue({ data: { keyPairs: [] } });
-  mockSubnets.mockReturnValue({ data: { subnets: [] } });
-    vi.clearAllMocks();
-    mockInstances.mockReturnValue({ data: { instances: [], total: 0 }, isLoading: false, isError: false, error: null });
-    mockKeyPairs.mockReturnValue({ data: { keyPairs: [] } });
-    mockSubnets.mockReturnValue({ data: { subnets: [] } });
-    mockSecurityGroups.mockReturnValue({ data: { securityGroups: [] } });
-  });
-
-  it("keeps a user-selected AMI when the catalog refreshes", async () => {
-    const user = userEvent.setup();
-    mockAmis.mockReturnValue({
-      data: {
-        images: [
-          { id: "ami-0abc", name: "Alpha", platform: "Linux", architecture: "x86_64" },
-          { id: "ami-0def", name: "Beta", platform: "Linux", architecture: "arm64" },
-        ],
-        total: 2,
-      },
-      isLoading: false,
-    });
-    render(<EC2InstanceList onSelect={vi.fn()} />, { wrapper: createWrapper() });
-    await clickButton(user, /create/i);
-    await waitFor(() => expect(screen.getByPlaceholderText("t3.micro")).toBeTruthy());
-    // The auto-detect effect picks the first AMI; switch to the second
-    await pickSelectOption(user, /ami-0abc/, /ami-0def/);
-    // Catalog "refreshes" with a new first image
-    mockAmis.mockReturnValue({
-      data: { images: [{ id: "ami-new", name: "New", platform: "Linux", architecture: "x86_64" }], total: 1 },
-      isLoading: false,
-    });
-    // Typing forces a re-render, re-running the auto-detect effect
-    await user.type(screen.getByPlaceholderText("t3.micro"), "m5.large");
-    await waitFor(() => {
-      const amiBtn = screen.getAllByRole("button").find((b) => b.textContent?.includes("ami-0def"));
-      expect(amiBtn).toBeTruthy();
-    });
-  });
-
-  it("re-selects the first AMI when the selection was cleared", async () => {
-    const user = userEvent.setup();
-    mockAmis.mockReturnValue({
-      data: {
-        images: [
-          { id: "ami-0abc", name: "Alpha", platform: "Linux", architecture: "x86_64" },
-          { id: "", name: "None", platform: "Linux", architecture: "x86_64" },
-        ],
-        total: 2,
-      },
-      isLoading: false,
-    });
-    render(<EC2InstanceList onSelect={vi.fn()} />, { wrapper: createWrapper() });
-    await clickButton(user, /create/i);
-    await waitFor(() => expect(screen.getByPlaceholderText("t3.micro")).toBeTruthy());
-    // Pick the empty-value option so form.imageId becomes ""
-    await pickSelectOption(user, /ami-0abc/, /None/);
-    // Refresh the catalog — the effect detects the cleared selection and re-picks
-    mockAmis.mockReturnValue({
-      data: { images: [{ id: "ami-fresh", name: "Fresh", platform: "Linux", architecture: "x86_64" }], total: 1 },
-      isLoading: false,
-    });
-    await user.type(screen.getByPlaceholderText("t3.micro"), "m5.large");
-    await waitFor(() => {
-      const amiBtn = screen.getAllByRole("button").find((b) => b.textContent?.includes("ami-fresh"));
-      expect(amiBtn).toBeTruthy();
-    });
-  });
-
-  it("renders AMI options with sparse metadata", async () => {
-    const user = userEvent.setup();
-    mockAmis.mockReturnValue({
-      data: {
-        images: [
-          { id: "ami-bare" },
-          { id: "ami-arch", architecture: "arm64" },
-          { id: "ami-full", name: "Full", platform: "Linux", architecture: "x86_64" },
-        ],
-        total: 3,
-      },
-      isLoading: false,
-    });
-    render(<EC2InstanceList onSelect={vi.fn()} />, { wrapper: createWrapper() });
-    await clickButton(user, /create/i);
-    await waitFor(() => expect(screen.getByPlaceholderText("t3.micro")).toBeTruthy());
-    const trigger = screen.getAllByRole("button").find((b) => b.textContent?.includes("ami-bare"));
-    await user.click(trigger!);
-    await waitFor(() => expect(screen.getAllByRole("option").length).toBe(3));
-  });
-
-  it("omits optional parameters when the empty options are selected", async () => {
-    const user = userEvent.setup();
-    mockAmis.mockReturnValue({
-      data: { images: [{ id: "ami-0abc", name: "Alpha", platform: "Linux", architecture: "x86_64" }], total: 1 },
-      isLoading: false,
-    });
-    render(<EC2InstanceList onSelect={vi.fn()} />, { wrapper: createWrapper() });
-    await clickButton(user, /create/i);
-    await waitFor(() => expect(screen.getByPlaceholderText("t3.micro")).toBeTruthy());
-    // Re-picking the empty-value options fires onChange with value ""
-    await pickSelectOption(user, /No key pair/, /No key pair/);
-    await pickSelectOption(user, /^Default$/, /Default/);
-    await pickLastDefaultOption(user);
-    await clickLastButton(user, /^Launch$/i);
-    await waitFor(() => expect(mockRunInstance).toHaveBeenCalled());
-    expect(mockRunInstance.mock.calls[0][0]).toEqual({ imageId: "ami-0abc", instanceType: "t3.micro" });
-  });
-});
 
 describe("EC2LaunchTemplateList — create modal AMI edges", () => {
   beforeEach(() => {
@@ -4057,22 +3257,7 @@ describe("EC2LaunchTemplateList — create modal AMI edges", () => {
 describe("EC2Page — error fallback messages", () => {
   beforeEach(() => { vi.clearAllMocks(); setupDefaults(); });
 
-  it("instances fall back to the default message when the error has no message", async () => {
-    mockInstances.mockReturnValue({ data: undefined, isLoading: false, isError: true, error: new Error() });
-    const user = userEvent.setup();
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await waitFor(() => expect(screen.getByText("Failed to load instances")).toBeTruthy());
-  });
 
-  it("instance detail falls back to the default message", async () => {
-    mockInstances.mockReturnValue({ data: { instances: [{ id: "i-err", state: "running", instanceType: "t2.micro" }], total: 1 }, isLoading: false, isError: false, error: null });
-    mockInstanceDetail.mockReturnValue({ data: undefined, isLoading: false, isError: true, error: new Error() });
-    const user = userEvent.setup();
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await waitFor(() => expect(screen.getByRole("button", { name: "i-err" })).toBeTruthy());
-    await user.click(screen.getByRole("button", { name: "i-err" }));
-    await waitFor(() => expect(screen.getByText("Failed to load")).toBeTruthy());
-  });
 
   it("VPCs fall back to the default message", async () => {
     mockVpcs.mockReturnValue({ data: undefined, isLoading: false, isError: true, error: new Error() });
@@ -4204,13 +3389,6 @@ describe("EC2Page — error fallback messages", () => {
 describe("EC2Page — cell and state ternaries", () => {
   beforeEach(() => { vi.clearAllMocks(); setupDefaults(); });
 
-  it("shows in-progress for a pending instance state and unknown for a missing state", async () => {
-    mockInstances.mockReturnValue({ data: { instances: [{ id: "i-pend", state: "pending", instanceType: "t2.micro" }, { id: "i-nostate", instanceType: "t2.micro" }], total: 2 }, isLoading: false, isError: false, error: null });
-    const user = userEvent.setup();
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await waitFor(() => expect(screen.getByText("i-pend")).toBeTruthy());
-    expect(screen.getByText("unknown")).toBeTruthy();
-  });
 
   it("shows Yes for a default VPC", async () => {
     mockVpcs.mockReturnValue({ data: { vpcs: [{ id: "vpc-def", state: "available", cidrBlock: "10.0.0.0/16", isDefault: true, instanceTenancy: "default" }], total: 1 }, isLoading: false, isError: false, error: null });
@@ -4333,28 +3511,7 @@ describe("EC2Page — cell and state ternaries", () => {
     await waitFor(() => expect(screen.queryByText("fl-2")).toBeNull());
   });
 
-  it("shows Yes for EBS optimized and Disabled for source-dest check", async () => {
-    mockInstances.mockReturnValue({ data: { instances: [{ id: "i-prop", state: "running", instanceType: "t2.micro" }], total: 1 }, isLoading: false, isError: false, error: null });
-    mockInstanceDetail.mockReturnValue({ data: { id: "i-prop", instanceType: "t2.micro", state: "running", ebsOptimized: true, sourceDestCheck: false }, isLoading: false, isError: false, error: null });
-    const user = userEvent.setup();
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await waitFor(() => expect(screen.getByRole("button", { name: "i-prop" })).toBeTruthy());
-    await user.click(screen.getByRole("button", { name: "i-prop" }));
-    await waitFor(() => expect(screen.getByText("Back to Instances")).toBeTruthy());
-    expect(screen.getByText("Yes")).toBeTruthy();
-    expect(screen.getByText("Disabled")).toBeTruthy();
-  });
 
-  it("shows N/A when source-dest check is undefined", async () => {
-    mockInstances.mockReturnValue({ data: { instances: [{ id: "i-prop2", state: "running", instanceType: "t2.micro" }], total: 1 }, isLoading: false, isError: false, error: null });
-    mockInstanceDetail.mockReturnValue({ data: { id: "i-prop2", instanceType: "t2.micro", state: "running" }, isLoading: false, isError: false, error: null });
-    const user = userEvent.setup();
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await waitFor(() => expect(screen.getByRole("button", { name: "i-prop2" })).toBeTruthy());
-    await user.click(screen.getByRole("button", { name: "i-prop2" }));
-    await waitFor(() => expect(screen.getByText("Back to Instances")).toBeTruthy());
-    expect(screen.getAllByText("N/A").length).toBeGreaterThan(0);
-  });
 });
 
 // ─── Create modal edges ────────────────────────────────
@@ -4449,15 +3606,6 @@ describe("EC2Page — create modal edges", () => {
     expect(mockCreateSecurityGroup.mock.calls[0][0]).toEqual({ groupName: "sg-default", description: "", vpcId: "" });
   });
 
-  it("shows the default message when the launch error has no message", async () => {
-    mockRunInstanceIsError = true;
-    mockRunInstanceError = new Error();
-    const user = userEvent.setup();
-    render(<EC2Page />, { wrapper: pageWrapper() });
-    await waitFor(() => expect(screen.getByText("No instances found")).toBeTruthy());
-    await clickButton(user, /Create Instance/i);
-    await waitFor(() => expect(screen.getByText("Failed to launch instance")).toBeTruthy());
-  });
 
   it("shows the default message when the flow log create error has no message", async () => {
     createFlowLogState.isError = true;
@@ -4567,45 +3715,6 @@ describe("EC2NetworkAclList — expanded detail edges", () => {
 
 // ─── Instance action button loading states ─────────────
 
-describe("EC2InstanceList — action button loading states", () => {
-  beforeEach(() => {
-  vi.clearAllMocks();
-  mockPrefixLists.mockReturnValue({ data: { prefixLists: [], total: 0 }, isLoading: false });
-  mockSpotRequests.mockReturnValue({ data: { spotInstanceRequests: [], total: 0 }, isLoading: false });
-  mockSgRules.mockReturnValue({ data: { rules: [], total: 0 }, isLoading: false });
-  requestSpotState.isError = false;
-  requestSpotState.error = null;
-  mockInstances.mockReturnValue({ data: { instances: [], total: 0 }, isLoading: false, isError: false, error: null });
-  mockKeyPairs.mockReturnValue({ data: { keyPairs: [] } });
-  mockSubnets.mockReturnValue({ data: { subnets: [] } });
-    vi.clearAllMocks();
-    mockKeyPairs.mockReturnValue({ data: { keyPairs: [] } });
-    mockSubnets.mockReturnValue({ data: { subnets: [] } });
-    mockSecurityGroups.mockReturnValue({ data: { securityGroups: [] } });
-    mockAmis.mockReturnValue({ data: { images: [] }, isLoading: false });
-  });
-
-  it("shows loading on start, stop, reboot, and terminate while pending", () => {
-    startInstanceState.isPending = true; startInstanceState.variables = "i-stopped";
-    stopInstanceState.isPending = true; stopInstanceState.variables = "i-running";
-    rebootInstanceState.isPending = true; rebootInstanceState.variables = "i-running";
-    terminateInstanceState.isPending = true; terminateInstanceState.variables = "i-stopped";
-    mockInstances.mockReturnValue({
-      data: {
-        instances: [
-          { id: "i-stopped", state: "stopped", instanceType: "t2.micro" },
-          { id: "i-running", state: "running", instanceType: "t2.micro" },
-        ],
-        total: 2,
-      },
-      isLoading: false, isError: false, error: null,
-    });
-    render(<EC2InstanceList onSelect={vi.fn()} />, { wrapper: createWrapper() });
-    expect(screen.getByRole("button", { name: /Start i-stopped/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Stop i-running/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Reboot i-running/i })).toBeTruthy();
-  });
-});
 
 describe("EC2Page — spot, prefix lists, SG rules tabs", () => {
   it("renders spot requests with rows", async () => {
@@ -4615,7 +3724,7 @@ describe("EC2Page — spot, prefix lists, SG rules tabs", () => {
     });
     const user = userEvent.setup();
     render(<EC2Page />, { wrapper: pageWrapper() });
-    await user.click(screen.getByRole("tab", { name: /Spot Requests/i }));
+    await goToTab(user, /Spot Requests/i);
     expect(await screen.findByText("sir-1")).toBeTruthy();
     expect(screen.getByText("fulfilled")).toBeTruthy();
   });
@@ -4624,7 +3733,7 @@ describe("EC2Page — spot, prefix lists, SG rules tabs", () => {
     mockRequestSpot.mockImplementation((_b: any, opts: any) => opts?.onSuccess?.());
     const user = userEvent.setup();
     render(<EC2Page />, { wrapper: pageWrapper() });
-    await user.click(screen.getByRole("tab", { name: /Spot Requests/i }));
+    await goToTab(user, /Spot Requests/i);
     const createBtn = await screen.findByRole("button", { name: /Create spot request/i });
     await user.click(createBtn);
     const dialog = screen.getAllByRole("dialog").find((d) => !d.className.includes("hidden"))!;
@@ -4649,7 +3758,7 @@ describe("EC2Page — spot, prefix lists, SG rules tabs", () => {
     });
     const user = userEvent.setup();
     render(<EC2Page />, { wrapper: pageWrapper() });
-    await user.click(screen.getByRole("tab", { name: /Spot Requests/i }));
+    await goToTab(user, /Spot Requests/i);
     const cancelBtn = (await screen.findAllByRole("button", { name: "Cancel" }))[0];
     await user.click(cancelBtn);
     await waitFor(() => expect(mockCancelSpot).toHaveBeenCalledWith(["sir-1"]));
@@ -4662,7 +3771,7 @@ describe("EC2Page — spot, prefix lists, SG rules tabs", () => {
     });
     const user = userEvent.setup();
     render(<EC2Page />, { wrapper: pageWrapper() });
-    await user.click(screen.getByRole("tab", { name: /Prefix Lists/i }));
+    await goToTab(user, /Prefix Lists/i);
     expect(await screen.findByText("pl-1")).toBeTruthy();
     expect(screen.getByText("10.0.0.0/8")).toBeTruthy();
   });
@@ -4680,7 +3789,7 @@ describe("EC2Page — spot, prefix lists, SG rules tabs", () => {
     });
     const user = userEvent.setup();
     render(<EC2Page />, { wrapper: pageWrapper() });
-    await user.click(screen.getByRole("tab", { name: /SG Rules/i }));
+    await goToTab(user, /Security group rules/i);
     expect(await screen.findByText("sgr-1")).toBeTruthy();
     expect(screen.getByText("1024-65535")).toBeTruthy();
     expect(screen.getByText("80")).toBeTruthy();
@@ -4693,7 +3802,7 @@ describe("EC2Page — spot/prefix/sg-rules edge arms", () => {
     requestSpotState.error = new Error("spot failed");
     const user = userEvent.setup();
     render(<EC2Page />, { wrapper: pageWrapper() });
-    await user.click(screen.getByRole("tab", { name: /Spot Requests/i }));
+    await goToTab(user, /Spot Requests/i);
     await user.click(await screen.findByRole("button", { name: /Create spot request/i }));
     expect(await screen.findByText("spot failed")).toBeTruthy();
 
@@ -4717,7 +3826,7 @@ describe("EC2Page — spot/prefix/sg-rules edge arms", () => {
     mockSpotRequests.mockReturnValue({ data: undefined, isLoading: false });
     const user = userEvent.setup();
     render(<EC2Page />, { wrapper: pageWrapper() });
-    await user.click(screen.getByRole("tab", { name: /Spot Requests/i }));
+    await goToTab(user, /Spot Requests/i);
     expect(await screen.findByText("No spot requests")).toBeTruthy();
   });
 
@@ -4726,14 +3835,14 @@ describe("EC2Page — spot/prefix/sg-rules edge arms", () => {
     requestSpotState.error = null;
     const user = userEvent.setup();
     render(<EC2Page />, { wrapper: pageWrapper() });
-    await user.click(screen.getByRole("tab", { name: /Spot Requests/i }));
+    await goToTab(user, /Spot Requests/i);
     await user.click(await screen.findByRole("button", { name: /Create spot request/i }));
     expect(await screen.findByText("Failed to request spot instances")).toBeTruthy();
 
     mockSpotRequests.mockReturnValue({ data: undefined, isLoading: false });
-    await user.click(screen.getByRole("tab", { name: /Prefix Lists/i }));
+    await goToTab(user, /Prefix Lists/i);
     expect(await screen.findByText("No prefix lists")).toBeTruthy();
-    await user.click(screen.getByRole("tab", { name: /SG Rules/i }));
+    await goToTab(user, /Security group rules/i);
     expect(await screen.findByText("No security group rules")).toBeTruthy();
   });
 
@@ -4741,7 +3850,7 @@ describe("EC2Page — spot/prefix/sg-rules edge arms", () => {
     mockRequestSpot.mockImplementation((_b: any, opts: any) => opts?.onSuccess?.());
     const user = userEvent.setup();
     render(<EC2Page />, { wrapper: pageWrapper() });
-    await user.click(screen.getByRole("tab", { name: /Spot Requests/i }));
+    await goToTab(user, /Spot Requests/i);
     await user.click(await screen.findByRole("button", { name: /Create spot request/i }));
     const dialog = screen.getAllByRole("dialog").find((d) => !d.className.includes("hidden"))!;
     const inputs = dialog.querySelectorAll("input");
@@ -4762,9 +3871,9 @@ describe("EC2Page — spot/prefix/sg-rules edge arms", () => {
     mockSgRules.mockReturnValue({ data: undefined, isLoading: false });
     const user = userEvent.setup();
     render(<EC2Page />, { wrapper: pageWrapper() });
-    await user.click(screen.getByRole("tab", { name: /Prefix Lists/i }));
+    await goToTab(user, /Prefix Lists/i);
     expect(await screen.findByText("No prefix lists")).toBeTruthy();
-    await user.click(screen.getByRole("tab", { name: /SG Rules/i }));
+    await goToTab(user, /Security group rules/i);
     expect(await screen.findByText("No security group rules")).toBeTruthy();
   });
 
@@ -4772,7 +3881,7 @@ describe("EC2Page — spot/prefix/sg-rules edge arms", () => {
     mockRequestSpot.mockImplementation((_b: any, opts: any) => opts?.onSuccess?.());
     const user = userEvent.setup();
     render(<EC2Page />, { wrapper: pageWrapper() });
-    await user.click(screen.getByRole("tab", { name: /Spot Requests/i }));
+    await goToTab(user, /Spot Requests/i);
     await user.click(await screen.findByRole("button", { name: /Create spot request/i }));
     const dialog = screen.getAllByRole("dialog").find((d) => !d.className.includes("hidden"))!;
     const inputs = dialog.querySelectorAll("input");
@@ -4798,12 +3907,77 @@ describe("EC2Page — spot/prefix/sg-rules edge arms", () => {
     });
     const user = userEvent.setup();
     render(<EC2Page />, { wrapper: pageWrapper() });
-    await user.click(screen.getByRole("tab", { name: /Spot Requests/i }));
+    await goToTab(user, /Spot Requests/i);
     await screen.findByText("sir-1");
     const cancels = screen.getAllByRole("button", { name: "Cancel" }).filter(
       (b) => !b.closest('[class*="awsui_hidden"]')
     );
     // row cancels (first 2) disabled; modal cancel is separate
     expect(cancels.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("EC2Page — VPC detail, key material and volumes", () => {
+  beforeEach(() => { vi.clearAllMocks(); setupDefaults(); });
+
+  it("returns null from VPC detail when data is undefined", async () => {
+    const user = userEvent.setup();
+    mockVpcs.mockReturnValue({
+      data: { vpcs: [{ id: "vpc-null", state: "available", cidrBlock: "10.0.0.0/16", isDefault: false, instanceTenancy: "default" }], total: 1 },
+      isLoading: false, isError: false, error: null,
+    });
+    mockVpc.mockReturnValue({ data: undefined, isLoading: false, isError: false, error: null });
+    render(<EC2Page />, { wrapper: pageWrapper() });
+    await goToTab(user, /VPCs/i);
+    await user.click(screen.getByRole("button", { name: "vpc-null" }));
+    await waitFor(() => {
+      expect(screen.queryByText("Back to VPCs")).toBeNull();
+    });
+  });
+
+  it("shows delete button in VPC detail for non-default VPC", async () => {
+    const user = userEvent.setup();
+    mockVpcs.mockReturnValue({
+      data: { vpcs: [{ id: "vpc-nondef", state: "available", cidrBlock: "10.0.0.0/16", isDefault: false, instanceTenancy: "default" }], total: 1 },
+      isLoading: false, isError: false, error: null,
+    });
+    mockVpc.mockReturnValue({
+      data: { id: "vpc-nondef", state: "available", cidrBlock: "10.0.0.0/16", isDefault: false, instanceTenancy: "default" },
+      isLoading: false, isError: false, error: null,
+    });
+    render(<EC2Page />, { wrapper: pageWrapper() });
+    await goToTab(user, /VPCs/i);
+    await user.click(screen.getByRole("button", { name: "vpc-nondef" }));
+    await waitFor(() => expect(screen.getByText("Back to VPCs")).toBeTruthy());
+    expect(screen.getByRole("button", { name: /Delete vpc-nondef/i })).toBeTruthy();
+  });
+
+  it("shows key material modal after creating a key pair", async () => {
+    mockCreateKeyPair.mockImplementation((_d: any, opts: any) => opts?.onSuccess?.({ keyMaterial: "PEM-BASE64-DATA" }));
+    const user = userEvent.setup();
+    render(<EC2Page />, { wrapper: pageWrapper() });
+    await goToTab(user, /Key Pairs/i);
+    await waitFor(() => expect(screen.getByText("No key pairs found")).toBeTruthy());
+    await clickButton(user, /Create Key Pair/i);
+    await waitFor(() => expect(screen.getAllByText("Create Key Pair").length).toBeGreaterThan(0));
+    await user.type(screen.getByPlaceholderText("my-key"), "kp-key");
+    await clickLastButton(user, /^Create$/i);
+    await waitFor(() => {
+      expect(screen.getByText("Key Pair Created")).toBeTruthy();
+      expect(screen.getByText("PEM-BASE64-DATA")).toBeTruthy();
+    });
+    await clickButton(user, /I've saved the key/i);
+  });
+
+  it("does NOT show delete button for volume in-use", async () => {
+    mockVolumes.mockReturnValue({
+      data: { volumes: [{ id: "vol-inuse", size: 8, volumeType: "gp2", state: "in-use", availabilityZone: "us-east-1a", attachments: [{ instanceId: "i-1", device: "/dev/sda" }] }], total: 1 },
+      isLoading: false, isError: false, error: null,
+    });
+    const user = userEvent.setup();
+    render(<EC2Page />, { wrapper: pageWrapper() });
+    await goToTab(user, /Volumes/i);
+    await waitFor(() => expect(screen.getAllByText("vol-inuse").length).toBeGreaterThan(0));
+    expect(screen.queryByRole("button", { name: /Delete vol-inuse/i })).toBeFalsy();
   });
 });

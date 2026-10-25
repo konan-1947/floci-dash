@@ -1,10 +1,7 @@
-import { useState, useEffect, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useEffect, useMemo } from "react";
 import {
-  ContentLayout,
   Header,
   Box,
-  BreadcrumbGroup,
   SpaceBetween,
   StatusIndicator,
   Modal,
@@ -14,21 +11,15 @@ import {
   Select,
   Button,
   Alert,
-  Tabs,
   Container,
-  Icon,
-  type TabsProps,
+  type SideNavigationProps,
 } from "@cloudscape-design/components";
-import EC2Terminal from "../components/EC2Terminal";
+import { useBreadcrumbs, useServiceNavigation } from "../components/ServiceNavigationContext";
+import EC2Overview from "./ec2/EC2Overview";
+import LaunchInstanceView from "./ec2/LaunchInstanceView";
+import { EC2InstanceDetail, EC2InstanceList } from "./ec2/InstancesView";
 import EC2NetworkTopology from "../components/EC2NetworkTopology";
 import {
-  useEC2Instances,
-  useEC2RunInstance,
-  useEC2TerminateInstance,
-  useEC2StartInstance,
-  useEC2StopInstance,
-  useEC2RebootInstance,
-  useEC2Instance,
   useEC2Vpcs,
   useEC2CreateVpc,
   useEC2DeleteVpc,
@@ -89,397 +80,97 @@ import DeleteButton from "../components/DeleteButton";
 import StatusBadge from "../components/StatusBadge";
 import PropertyTable from "../components/PropertyTable";
 
+// ─── PAGE ──────────────────────────────────────────────
+
+type EC2View =
+  | { name: "section" }
+  | { name: "launch" }
+  | { name: "instance"; id: string }
+  | { name: "vpc"; id: string };
+
+/** Side navigation sections, grouped like the EC2 console. VPC resources live in their own console on AWS. */
+const EC2_NAV: { section?: string; links: [id: string, text: string][] }[] = [
+  { links: [["dashboard", "EC2 Dashboard"]] },
+  { section: "Instances", links: [["instances", "Instances"], ["launch-templates", "Launch Templates"], ["spot-requests", "Spot Requests"]] },
+  { section: "Images", links: [["amis", "AMIs"]] },
+  { section: "Elastic Block Store", links: [["volumes", "Volumes"]] },
+  {
+    section: "Network & Security",
+    links: [["security-groups", "Security Groups"], ["sg-rules", "Security group rules"], ["elastic-ips", "Elastic IPs"], ["key-pairs", "Key Pairs"], ["network-interfaces", "Network Interfaces"]],
+  },
+  {
+    section: "Virtual private cloud",
+    links: [
+      ["vpcs", "VPCs"], ["subnets", "Subnets"], ["route-tables", "Route Tables"], ["internet-gateways", "Internet Gateways"],
+      ["nat-gateways", "NAT Gateways"], ["network-acls", "Network ACLs"], ["prefix-lists", "Managed prefix lists"],
+      ["flow-logs", "Flow Logs"], ["topology", "Network Topology"],
+    ],
+  },
+];
+
+const SECTION_TITLES: Record<string, string> = Object.fromEntries(EC2_NAV.flatMap((g) => g.links));
+
+const NAV_ITEMS: SideNavigationProps.Item[] = EC2_NAV.flatMap((g): SideNavigationProps.Item[] => {
+  const links = g.links.map(([id, text]) => ({ type: "link" as const, text, href: `#${id}` }));
+  return g.section ? [{ type: "section", text: g.section, items: links }] : links;
+});
+
+/** EC2, laid out like the AWS console: grouped side navigation, an EC2 Dashboard and an instances page. */
 export default function EC2Page() {
-  const navigate = useNavigate();
-  const [selectedTab, setSelectedTab] = useState("instances");
-  const [selectedInstance, setSelectedInstance] = useState<string | null>(null);
-  const [selectedVpc, setSelectedVpc] = useState<string | null>(null);
+  const [section, setSection] = useState("dashboard");
+  const [view, setView] = useState<EC2View>({ name: "section" });
 
-  if (selectedInstance) {
-    return <EC2InstanceDetail id={selectedInstance} onBack={() => setSelectedInstance(null)} />;
-  }
+  const open = (s: string) => {
+    setSection(s);
+    setView({ name: "section" });
+  };
+  const launch = () => {
+    setSection("instances");
+    setView({ name: "launch" });
+  };
 
-  if (selectedVpc) {
-    return <EC2VpcDetail id={selectedVpc} onBack={() => setSelectedVpc(null)} />;
-  }
-
-  const tabs: TabsProps.Tab[] = [
-    {
-      id: "instances",
-      label: "Instances",
-      content: <EC2InstanceList onSelect={(id) => setSelectedInstance(id)} />,
-    },
-    {
-      id: "vpcs",
-      label: "VPCs",
-      content: <EC2VpcList onSelect={(id) => setSelectedVpc(id)} />,
-    },
-    {
-      id: "subnets",
-      label: "Subnets",
-      content: <EC2SubnetList />,
-    },
-    {
-      id: "security-groups",
-      label: "Security Groups",
-      content: <EC2SecurityGroupList />,
-    },
-    {
-      id: "key-pairs",
-      label: "Key Pairs",
-      content: <EC2KeyPairList />,
-    },
-    {
-      id: "elastic-ips",
-      label: "Elastic IPs",
-      content: <EC2ElasticIpList />,
-    },
-    {
-      id: "internet-gateways",
-      label: "Internet Gateways",
-      content: <EC2InternetGatewayList />,
-    },
-    {
-      id: "route-tables",
-      label: "Route Tables",
-      content: <EC2RouteTableList />,
-    },
-    {
-      id: "nat-gateways",
-      label: "NAT Gateways",
-      content: <EC2NatGatewayList />,
-    },
-    {
-      id: "volumes",
-      label: "Volumes",
-      content: <EC2VolumeList />,
-    },
-    {
-      id: "launch-templates",
-      label: "Launch Templates",
-      content: <EC2LaunchTemplateList />,
-    },
-    {
-      id: "amis",
-      label: "AMIs",
-      content: <EC2AmiList />,
-    },
-    {
-      id: "network-interfaces",
-      label: "Network Interfaces",
-      content: <EC2NetworkInterfaceList />,
-    },
-    {
-      id: "spot-requests",
-      label: "Spot Requests",
-      content: <EC2SpotRequestList />,
-    },
-    {
-      id: "prefix-lists",
-      label: "Prefix Lists",
-      content: <EC2PrefixListList />,
-    },
-    {
-      id: "sg-rules",
-      label: "SG Rules",
-      content: <EC2SecurityGroupRulesTab />,
-    },
-    {
-      id: "flow-logs",
-      label: "Flow Logs",
-      content: <EC2FlowLogList />,
-    },
-    {
-      id: "network-acls",
-      label: "Network ACLs",
-      content: <EC2NetworkAclList />,
-    },
-    {
-      id: "topology",
-      label: "Network Topology",
-      content: <EC2NetworkTopology />,
-    },
-  ];
-
-  return (
-    <ContentLayout
-      header={
-        <SpaceBetween size="xs">
-          <BreadcrumbGroup
-            items={[
-              { text: "Dashboard", href: "/#/" },
-              { text: "EC2", href: "/#/services/ec2" },
-            ]}
-            onFollow={(e) => {
-              e.preventDefault();
-              navigate(e.detail.href.replace("/#", ""));
-            }}
-          />
-          <Header variant="h1" description="Amazon Elastic Compute Cloud">
-            EC2 <StatusBadge status="available" />
-          </Header>
-        </SpaceBetween>
-      }
-    >
-      <Tabs
-        activeTabId={selectedTab}
-        onChange={({ detail }) => setSelectedTab(detail.activeTabId)}
-        tabs={tabs}
-      />
-    </ContentLayout>
+  const nav = useMemo(
+    () => ({ header: { text: "EC2", href: "#dashboard" }, items: NAV_ITEMS, activeHref: `#${section}`, onFollow: (href: string) => open(href.slice(1)) }),
+    [section],
   );
-}
+  useServiceNavigation(nav);
 
-// ─── INSTANCES ─────────────────────────────────────────
+  const crumbs = useMemo(() => {
+    // As in the console, crumbs start at the service (no console home).
+    const items = [{ text: "EC2", href: "#dashboard" }];
+    if (section !== "dashboard") items.push({ text: SECTION_TITLES[section], href: `#${section}` });
+    if (view.name === "launch") items.push({ text: "Launch an instance", href: "#instances" });
+    if (view.name === "instance" || view.name === "vpc") items.push({ text: view.id, href: `#${section}` });
+    return items;
+  }, [section, view]);
+  useBreadcrumbs(crumbs);
 
-export function EC2InstanceList({ onSelect }: { onSelect: (id: string) => void }) {
-  const { data, isLoading, isError, error } = useEC2Instances();
-  const runInstance = useEC2RunInstance();
-  const terminateInstance = useEC2TerminateInstance();
-  const startInstance = useEC2StartInstance();
-  const stopInstance = useEC2StopInstance();
-  const rebootInstance = useEC2RebootInstance();
+  if (view.name === "launch") return <LaunchInstanceView onDone={() => open("instances")} />;
+  if (view.name === "instance") return <EC2InstanceDetail id={view.id} onBack={() => open("instances")} />;
+  if (view.name === "vpc") return <EC2VpcDetail id={view.id} onBack={() => open("vpcs")} />;
 
-  const { data: keyPairs } = useEC2KeyPairs();
-  const { data: subnets } = useEC2Subnets();
-  const { data: sgs } = useEC2SecurityGroups();
-  const { data: amis } = useEC2Amis();
-
-  const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState({
-    imageId: "ami-0abcdef1234567891",
-    instanceType: "t3.micro",
-    keyName: "",
-    subnetId: "",
-    securityGroupId: "",
-  });
-
-  // Auto-detect first available AMI when launch modal opens
-  useEffect(() => {
-    if (showCreate && amis?.images?.length) {
-      setForm(p => p.imageId === "ami-0abcdef1234567891" || !p.imageId ? { ...p, imageId: amis.images[0].id } : p);
-    }
-  }, [showCreate, amis]);
-
-  // Reset auto-detection when modal closes
-  useEffect(() => {
-    if (!showCreate) {
-      setForm(p => ({ ...p, imageId: "ami-0abcdef1234567891" }));
-    }
-  }, [showCreate]);
-
-  const items = (data?.instances || [])
-    .filter((i) => i.state !== "terminated")
-    .map((i) => ({
-      id: i.id,
-      state: i.state,
-      instanceType: i.instanceType,
-      privateIp: i.privateIp,
-      publicIp: i.publicIp,
-      vpcId: i.vpcId,
-      subnetId: i.subnetId,
-      launchTime: i.launchTime,
-      keyName: i.keyName,
-    }));
-
-  const amiImages = amis?.images && amis.images.length > 0 ? amis.images : [];
-
-  function handleCreate() {
-    runInstance.mutate(
-      {
-        imageId: form.imageId,
-        instanceType: form.instanceType,
-        ...(form.keyName ? { keyName: form.keyName } : {}),
-        ...(form.subnetId ? { subnetId: form.subnetId } : {}),
-        ...(form.securityGroupId ? { securityGroupIds: [form.securityGroupId] } : {}),
-      },
-      { onSuccess: () => setShowCreate(false) }
-    );
+  switch (section) {
+    case "instances": return <EC2InstanceList onSelect={(id) => setView({ name: "instance", id })} onLaunch={launch} onLaunchFromTemplate={() => open("launch-templates")} />;
+    case "launch-templates": return <EC2LaunchTemplateList />;
+    case "spot-requests": return <EC2SpotRequestList />;
+    case "amis": return <EC2AmiList />;
+    case "volumes": return <EC2VolumeList />;
+    case "security-groups": return <EC2SecurityGroupList />;
+    case "sg-rules": return <EC2SecurityGroupRulesTab />;
+    case "elastic-ips": return <EC2ElasticIpList />;
+    case "key-pairs": return <EC2KeyPairList />;
+    case "network-interfaces": return <EC2NetworkInterfaceList />;
+    case "vpcs": return <EC2VpcList onSelect={(id) => setView({ name: "vpc", id })} />;
+    case "subnets": return <EC2SubnetList />;
+    case "route-tables": return <EC2RouteTableList />;
+    case "internet-gateways": return <EC2InternetGatewayList />;
+    case "nat-gateways": return <EC2NatGatewayList />;
+    case "network-acls": return <EC2NetworkAclList />;
+    case "prefix-lists": return <EC2PrefixListList />;
+    case "flow-logs": return <EC2FlowLogList />;
+    case "topology": return <EC2NetworkTopology />;
+    default: return <EC2Overview onOpen={open} onLaunch={launch} />;
   }
-
-  return (
-    <>
-      {isError && <StatusIndicator type="error">{(error as Error)?.message || "Failed to load instances"}</StatusIndicator>}
-      <ResourceTable
-        resourceName="Instance"
-        headerTitle="Instances"
-        headerCounter={data?.total}
-        items={items}
-        columns={[
-          { id: "id", header: "Instance ID", cell: (item: any) => <Button variant="link" onClick={() => onSelect(item.id)}>{item.id}</Button>, isRowHeader: true },
-          { id: "state", header: "State", cell: (item: any) => (
-            <StatusIndicator type={item.state === "running" ? "success" : item.state === "stopped" ? "warning" : "in-progress"}>{item.state || "unknown"}</StatusIndicator>
-          )},
-          { id: "type", header: "Type", cell: (item: any) => item.instanceType },
-          { id: "privateIp", header: "Private IP", cell: (item: any) => item.privateIp || "-" },
-          { id: "publicIp", header: "Public IP", cell: (item: any) => item.publicIp || "-" },
-          { id: "actions", header: "", cell: (item: any) => (
-            <SpaceBetween direction="horizontal" size="xs">
-              {item.state === "stopped" && (
-                <Button variant="icon" iconName="play" ariaLabel={`Start ${item.id}`} loading={startInstance.isPending && startInstance.variables === item.id} onClick={() => startInstance.mutate(item.id)} />
-              )}
-              {item.state === "running" && (
-                <>
-                  <Button variant="icon" iconName="undo" ariaLabel={`Stop ${item.id}`} loading={stopInstance.isPending && stopInstance.variables === item.id} onClick={() => stopInstance.mutate(item.id)} />
-                  <Button variant="icon" iconName="refresh" ariaLabel={`Reboot ${item.id}`} loading={rebootInstance.isPending && rebootInstance.variables === item.id} onClick={() => rebootInstance.mutate(item.id)} />
-                </>
-              )}
-              <DeleteButton itemName={item.id} resourceType="instance" loading={terminateInstance.isPending && terminateInstance.variables === item.id} onDelete={() => terminateInstance.mutateAsync(item.id)} />
-            </SpaceBetween>
-          )},
-        ]}
-        loading={isLoading}
-        emptyMessage="No instances found"
-        filterEnabled
-        filterPlaceholder="Find instances by ID"
-        filterFunction={(item: any, t: string) => item.id.toLowerCase().includes(t.toLowerCase())}
-        onCreate={() => setShowCreate(true)}
-      />
-
-      <Modal visible={showCreate} onDismiss={() => setShowCreate(false)} header="Launch Instance" size="medium"
-        footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs">
-          <Button variant="link" onClick={() => setShowCreate(false)}>Cancel</Button>
-          <Button variant="primary" loading={runInstance.isPending} disabled={!form.imageId} onClick={handleCreate}>Launch</Button>
-        </SpaceBetween></Box>}
-      >
-        <Form>
-          {runInstance.isError && <Alert type="error" dismissible>{(runInstance.error as Error)?.message || "Failed to launch instance"}</Alert>}
-          <SpaceBetween size="m">
-            <FormField label="AMI ID" description="Amazon Machine Image">
-              {amiImages.length > 0 ? (
-                <Select
-                  selectedOption={form.imageId ? { label: form.imageId, value: form.imageId } : null}
-                  onChange={({ detail }) => setForm(p => ({ ...p, imageId: detail.selectedOption.value || "" }))}
-                  options={amiImages.map(img => ({
-                    label: `${img.id}${img.name ? ` — ${img.name}` : ""}`,
-                    description: img.platform || img.architecture || "",
-                    value: img.id,
-                  }))}
-                />
-              ) : (
-                <Input value={form.imageId} onChange={({ detail }) => setForm(p => ({ ...p, imageId: detail.value }))} placeholder="ami-xxx" />
-              )}
-            </FormField>
-            <FormField label="Instance type"><Input value={form.instanceType} onChange={({ detail }) => setForm(p => ({ ...p, instanceType: detail.value }))} placeholder="t3.micro" /></FormField>
-            <FormField label="Key pair (optional)">
-              <Select
-                selectedOption={form.keyName ? { label: form.keyName, value: form.keyName } : { label: "No key pair", value: "" }}
-                onChange={({ detail }) => setForm(p => ({ ...p, keyName: detail.selectedOption.value || "" }))}
-                options={[{ label: "No key pair", value: "" }, ...(keyPairs?.keyPairs || []).map(k => ({ label: k.name, value: k.name }))]}
-              />
-            </FormField>
-            <FormField label="Subnet (optional)">
-              <Select
-                selectedOption={form.subnetId ? { label: form.subnetId, value: form.subnetId } : { label: "Default", value: "" }}
-                onChange={({ detail }) => setForm(p => ({ ...p, subnetId: detail.selectedOption.value || "" }))}
-                options={[{ label: "Default", value: "" }, ...(subnets?.subnets || []).map(s => ({ label: `${s.id} (${s.cidrBlock})`, value: s.id }))]}
-              />
-            </FormField>
-            <FormField label="Security group (optional)">
-              <Select
-                selectedOption={form.securityGroupId ? { label: form.securityGroupId, value: form.securityGroupId } : { label: "Default", value: "" }}
-                onChange={({ detail }) => setForm(p => ({ ...p, securityGroupId: detail.selectedOption.value || "" }))}
-                options={[{ label: "Default", value: "" }, ...(sgs?.securityGroups || []).map(sg => ({ label: `${sg.name} (${sg.id})`, value: sg.id }))]}
-              />
-            </FormField>
-          </SpaceBetween>
-        </Form>
-      </Modal>
-    </>
-  );
-}
-
-function EC2InstanceDetail({ id, onBack }: { id: string; onBack: () => void }) {
-  const { data, isLoading, isError, error } = useEC2Instance(id);
-  const startInstance = useEC2StartInstance();
-  const stopInstance = useEC2StopInstance();
-  const rebootInstance = useEC2RebootInstance();
-  const terminateInstance = useEC2TerminateInstance();
-  const [showTerminal, setShowTerminal] = useState(false);
-
-  if (isLoading) return <StatusIndicator type="loading">Loading instance details...</StatusIndicator>;
-  if (isError) return <StatusIndicator type="error">{(error as Error)?.message || "Failed to load"}</StatusIndicator>;
-  if (!data) return null;
-
-  return (
-    <SpaceBetween size="l">
-      <Button variant="link" iconName="arrow-left" onClick={onBack}>Back to Instances</Button>
-      <Header
-        variant="h2"
-        description={`${data.instanceType} — ${data.state}`}
-        actions={<SpaceBetween direction="horizontal" size="xs">
-          {data.state === "running" && (
-            <Button iconName="contact" onClick={() => setShowTerminal(true)}>Connect</Button>
-          )}
-          {data.state === "stopped" && <Button iconName="play" loading={startInstance.isPending} onClick={() => startInstance.mutate(id)}>Start</Button>}
-          {data.state === "running" && <>
-            <Button iconName="undo" loading={stopInstance.isPending} onClick={() => stopInstance.mutate(id)}>Stop</Button>
-            <Button iconName="refresh" loading={rebootInstance.isPending} onClick={() => rebootInstance.mutate(id)}>Reboot</Button>
-          </>}
-          <DeleteButton itemName={id} resourceType="instance" loading={terminateInstance.isPending} onDelete={() => terminateInstance.mutateAsync(id).then(() => onBack())} />
-        </SpaceBetween>}
-      >
-        {data.id}
-      </Header>
-
-      {/* Web Terminal Modal */}
-      <Modal
-        visible={showTerminal}
-        onDismiss={() => setShowTerminal(false)}
-        header={`Terminal — ${id}`}
-        size="max"
-      >
-        <EC2Terminal instanceId={id} onClose={() => setShowTerminal(false)} />
-      </Modal>
-
-      <PropertyTable
-        items={[
-          { label: "State", value: data.state },
-          { label: "Instance type", value: data.instanceType },
-          { label: "Private IP", value: data.privateIp || "N/A" },
-          { label: "Public IP", value: data.publicIp || "N/A" },
-          { label: "VPC ID", value: data.vpcId || "N/A" },
-          { label: "Subnet ID", value: data.subnetId || "N/A" },
-          { label: "Key name", value: data.keyName || "N/A" },
-          { label: "AMI ID", value: data.imageId || "N/A" },
-          { label: "Availability Zone", value: data.availabilityZone || "N/A" },
-          { label: "Architecture", value: data.architecture || "N/A" },
-          { label: "Platform", value: data.platform || "Linux/Unix" },
-          { label: "Launch time", value: data.launchTime ? new Date(data.launchTime).toLocaleString() : "N/A" },
-          { label: "IAM Profile", value: data.iamInstanceProfile || "N/A" },
-          { label: "EBS Optimized", value: data.ebsOptimized ? "Yes" : "No" },
-          { label: "Monitoring", value: data.monitoring || "disabled" },
-          { label: "Source/Dest Check", value: data.sourceDestCheck !== undefined ? (data.sourceDestCheck ? "Enabled" : "Disabled") : "N/A" },
-          { label: "Root device", value: data.rootDeviceName || "N/A" },
-          { label: "Root device type", value: data.rootDeviceType || "N/A" },
-        ]}
-      />
-
-      {/* Connection Info Panel */}
-      <Container header={<Header variant="h3">Connection Info</Header>}>
-        <SpaceBetween size="s">
-          <div>
-            <Box color="text-label" fontSize="body-s" fontWeight="bold" padding={{ bottom: "xxs" }}>
-              <Icon name="script" /> Docker Exec
-            </Box>
-            <CommandBox command={`docker exec -it floci-ec2-${id} bash`} />
-          </div>
-          <div>
-            <Box color="text-label" fontSize="body-s" fontWeight="bold" padding={{ bottom: "xxs" }}>
-              <Icon name="search" /> Find SSH Port
-            </Box>
-            <CommandBox command={`docker port floci-ec2-${id} 22`} />
-          </div>
-          <div>
-            <Box color="text-label" fontSize="body-s" fontWeight="bold" padding={{ bottom: "xxs" }}>
-              <Icon name="keyboard" /> SSH (replace PORT with output above)
-            </Box>
-            <CommandBox command="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@localhost -p PORT" />
-          </div>
-        </SpaceBetween>
-      </Container>
-    </SpaceBetween>
-  );
 }
 
 // ─── VPCS ──────────────────────────────────────────────
@@ -1315,45 +1006,6 @@ function EC2AmiList() {
         filterPlaceholder="Find AMIs by ID or name" filterFunction={(item: any, t: string) => item.id.toLowerCase().includes(t.toLowerCase()) || (item.name || "").toLowerCase().includes(t.toLowerCase())}
       />
     </>
-  );
-}
-
-// ─── CONNECTION INFO HELPERS ───────────────────────────
-
-function CommandBox({ command }: { command: string }) {
-  const [copied, setCopied] = useState(false);
-  const inputRef = useRef(null);
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(command);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Fallback: select the input text
-      (inputRef.current as any).select();
-    }
-  };
-
-  return (
-    <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-      <Input
-        ref={inputRef}
-        readOnly
-        value={command}
-        onFocus={(e: any) => {
-          // Try to select text in the native input element
-          const nativeInput = e.target?.querySelector?.("input") || e.target;
-          nativeInput.select?.();
-        }}
-      />
-      <Button
-        variant="icon"
-        iconName={copied ? "status-positive" : "copy"}
-        ariaLabel={copied ? "Copied" : "Copy to clipboard"}
-        onClick={handleCopy}
-      />
-    </div>
   );
 }
 

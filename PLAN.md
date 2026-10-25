@@ -2070,3 +2070,18 @@ Quick wins first (Small), then Medium, then Large — each adds a full backend r
 | 13 | **EFS** (N.3) | ✅ **Done** (2026-09-10) — 17 ops |
 | ~~16~~ | ~~**Network Firewall** (N.7)~~ | ✅ **Done** (2026-09-12) — 27 ops |
 | ~~17~~ | ~~**Service Catalog** (N.8)~~ | ✅ **Done v1** (2026-09-12) — core CRUD + provisioning shipped; plans/actions/shares deferred |
+
+---
+
+## Phase 28 — AWS console look (shell first, then pages)
+
+Colors and layout sampled from real AWS console screenshots (AWS Organizations pages). Gap reports: `docs/organizations-aws-console-gap.md`, `docs/floci-feature-coverage.md`.
+
+| # | Task | Status | Date |
+|---|------|--------|------|
+| 28.1 | Cloudscape theme with sampled console colors (`lib/awsConsoleTheme.ts`), light mode by default | In Progress | 2026-10-25 |
+| 28.2 | Console top bar: Services menu, `Alt+S` search, Help + Settings menus; favorites bar | In Progress | 2026-10-25 |
+| 28.3 | Shell context: per-service side navigation + breadcrumbs slot; full-width flash messages; no duplicate page header | In Progress | 2026-10-25 |
+| 28.4 | AWS Organizations: own side nav, intro page, AWS accounts tree with Actions, Add account, Policies (types + policies), Settings | In Progress | 2026-10-25 |
+| 28.5 | Organizations backend: drop invented `ParentId` tag, account tags, `/children?childType=` | In Progress | 2026-10-25 |
+| 28.6 | Next pages in console style (S3, EC2, …) | Pending | |
